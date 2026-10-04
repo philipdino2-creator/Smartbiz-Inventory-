@@ -1,0 +1,128 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --brand-purple: #4C0196;
+    --brand-burgundy: #7B001C;
+    --brand-silver: #C0C0C0;
+    --brand-soft: #F2F2F2;
+  }
+
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    color: #1e293b;
+    background-color: #f8fafc;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+@media print {
+  @page {
+    margin: 0;
+  }
+
+  body {
+    background: white !important;
+    color: black !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+
+  /* Isolate receipt for printer output - hide everything else in application */
+  body.printing-receipt {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: white !important;
+  }
+
+  body.printing-receipt nav,
+  body.printing-receipt header,
+  body.printing-receipt footer,
+  body.printing-receipt main,
+  body.printing-receipt aside,
+  body.printing-receipt [role="dialog"] > div > div > .no-print {
+    display: none !important;
+  }
+
+  body.printing-receipt .modal-backdrop-print {
+    position: static !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    display: block !important;
+    overflow: visible !important;
+  }
+
+  body.printing-receipt .modal-window-print {
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    background: transparent !important;
+  }
+
+  /* Specific Thermal 58mm layout print rules */
+  body.printing-58mm {
+    width: 58mm !important;
+  }
+  body.printing-58mm #printable-receipt-target {
+    width: 58mm !important;
+    max-width: 58mm !important;
+    padding: 1mm !important;
+    margin: 0 auto !important;
+    font-family: 'Courier New', Courier, monospace !important;
+    font-size: 9.5px !important;
+    line-height: 1.25 !important;
+    color: black !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+  body.printing-58mm #printable-receipt-target * {
+    color: black !important;
+    border-color: black !important;
+  }
+
+  /* Specific Thermal 80mm layout print rules */
+  body.printing-80mm {
+    width: 80mm !important;
+  }
+  body.printing-80mm #printable-receipt-target {
+    width: 80mm !important;
+    max-width: 80mm !important;
+    padding: 2mm !important;
+    margin: 0 auto !important;
+    font-family: 'Courier New', Courier, monospace !important;
+    font-size: 11px !important;
+    line-height: 1.35 !important;
+    color: black !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+  body.printing-80mm #printable-receipt-target * {
+    color: black !important;
+    border-color: black !important;
+  }
+
+  /* Standard A4 Invoice print rules */
+  body.printing-a4 #printable-receipt-target {
+    width: 100% !important;
+    max-width: 210mm !important;
+    margin: 0 auto !important;
+    padding: 10mm !important;
+    font-size: 12px !important;
+  }
+}
