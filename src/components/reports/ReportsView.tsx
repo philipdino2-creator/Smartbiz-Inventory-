@@ -11,7 +11,11 @@ import {
 } from 'lucide-react';
 
 export const ReportsView: React.FC = () => {
-  const { business, sales, expenses, customers, payables, currentUser } = useBusiness();
+  const { business, sales, expenses, customers, payables, currentUser, hasPermission } = useBusiness();
+
+  const canViewReports = hasPermission('view_reports');
+  const canViewProfit = hasPermission('view_profit');
+  const canExport = hasPermission('export_financial_data');
 
   const [reportType, setReportType] = useState<'pnl' | 'sales' | 'expenses' | 'debtors' | 'payables'>('pnl');
   const [dateRange, setDateRange] = useState<'this_month' | 'all_time'>('this_month');
@@ -33,17 +37,23 @@ export const ReportsView: React.FC = () => {
     return expenses;
   }, [expenses, dateRange, currentMonthPrefix]);
 
-  // P&L Calculations
-  const totalRevenue = activeSales.reduce((sum, s) => sum + s.totalAmount, 0);
+  // P&L Calculations with strict VAT and Net Operating Revenue Separation
+  // Gross Invoiced: Total billed to customers (includes statutory tax liability)
+  const grossInvoiced = activeSales.reduce((sum, s) => sum + (Number(s.totalAmount) || 0), 0);
+  // Total VAT: Tax collected on behalf of the tax authority (FIRS in Nigeria), excluded from turnover
+  const totalVat = activeSales.reduce((sum, s) => sum + (Number(s.taxAmount) || 0), 0);
+  // Net Operating Revenue: True business turnover
+  const operatingRevenue = Math.max(0, grossInvoiced - totalVat);
+
   const totalCogs = activeSales.reduce((acc, s) => {
     return acc + s.items.reduce((sum, item) => sum + (item.quantity * (item.costPrice || 0)), 0);
   }, 0);
-  const grossProfit = totalRevenue - totalCogs;
-  const grossMargin = totalRevenue > 0 ? (grossProfit / totalRevenue) * 100 : 0;
+  const grossProfit = operatingRevenue - totalCogs;
+  const grossMargin = operatingRevenue > 0 ? (grossProfit / operatingRevenue) * 100 : 0;
 
-  const totalExpenses = activeExpenses.reduce((sum, e) => sum + e.amount, 0);
+  const totalExpenses = activeExpenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
   const netProfit = grossProfit - totalExpenses;
-  const netMargin = totalRevenue > 0 ? (netProfit / totalRevenue) * 100 : 0;
+  const netMargin = operatingRevenue > 0 ? (netProfit / operatingRevenue) * 100 : 0;
 
   // Expense breakdown by category
   const expenseByCategory = useMemo(() => {
@@ -81,15 +91,22 @@ export const ReportsView: React.FC = () => {
   const periodLabel = dateRange === 'this_month' ? 'This Month' : 'All Time';
 
   const handleExportCSV = () => {
+    if (!canExport) {
+      alert('Permission Denied: You do not have permission to export financial data (export_financial_data).');
+      return;
+    }
+
     if (reportType === 'pnl') {
       const headers = ['Line Item', 'Description / Details', 'Amount', 'Currency'];
       const rows = [
-        ['1. Gross Operating Revenue', 'Invoiced Sales', totalRevenue, business.currency],
-        ['2. Cost of Goods Sold (COGS)', 'Product Direct Costs', -totalCogs, business.currency],
-        ['3. Gross Profit', `Margin: ${grossMargin.toFixed(2)}%`, grossProfit, business.currency],
+        ['1. Gross Invoiced Total', 'Customer Invoices Billed (Gross)', grossInvoiced, business.currency],
+        ['2. Less: Statutory VAT (7.5%)', 'Tax Liability to FIRS (Excluded from Turnover)', -totalVat, business.currency],
+        ['3. Net Operating Revenue', 'True Business Turnover', operatingRevenue, business.currency],
+        ['4. Cost of Goods Sold (COGS)', 'Product Direct Costs', -totalCogs, business.currency],
+        ['5. Gross Profit', `Margin: ${grossMargin.toFixed(2)}%`, grossProfit, business.currency],
         ...expenseByCategory.map(([cat, amt]) => ['Operating Expense', cat, -amt, business.currency]),
-        ['4. Total Operating Expenses', 'Overheads & Running Costs', -totalExpenses, business.currency],
-        ['5. Net Estimated Profit', `Net Margin: ${netMargin.toFixed(2)}%`, netProfit, business.currency],
+        ['6. Total Operating Expenses', 'Overheads & Running Costs', -totalExpenses, business.currency],
+        ['7. Net Estimated Profit', `Net Margin: ${netMargin.toFixed(2)}%`, netProfit, business.currency],
       ];
       exportToCSV(`smartcore_pnl_report_${dateStamp}`, headers, rows);
     } else if (reportType === 'sales') {
@@ -145,15 +162,22 @@ export const ReportsView: React.FC = () => {
   };
 
   const handleExportExcel = async () => {
+    if (!canExport) {
+      alert('Permission Denied: You do not have permission to export financial data (export_financial_data).');
+      return;
+    }
+
     if (reportType === 'pnl') {
       const headers = ['Line Item', 'Description / Details', 'Amount', 'Currency'];
       const rows = [
-        ['1. Gross Operating Revenue', 'Invoiced Sales', totalRevenue, business.currency],
-        ['2. Cost of Goods Sold (COGS)', 'Product Direct Costs', -totalCogs, business.currency],
-        ['3. Gross Profit', `Margin: ${grossMargin.toFixed(2)}%`, grossProfit, business.currency],
+        ['1. Gross Invoiced Total', 'Customer Invoices Billed (Gross)', grossInvoiced, business.currency],
+        ['2. Less: Statutory VAT (7.5%)', 'Tax Liability to FIRS (Excluded from Turnover)', -totalVat, business.currency],
+        ['3. Net Operating Revenue', 'True Business Turnover', operatingRevenue, business.currency],
+        ['4. Cost of Goods Sold (COGS)', 'Product Direct Costs', -totalCogs, business.currency],
+        ['5. Gross Profit', `Margin: ${grossMargin.toFixed(2)}%`, grossProfit, business.currency],
         ...expenseByCategory.map(([cat, amt]) => ['Operating Expense', cat, -amt, business.currency]),
-        ['4. Total Operating Expenses', 'Overheads & Running Costs', -totalExpenses, business.currency],
-        ['5. Net Estimated Profit', `Net Margin: ${netMargin.toFixed(2)}%`, netProfit, business.currency],
+        ['6. Total Operating Expenses', 'Overheads & Running Costs', -totalExpenses, business.currency],
+        ['7. Net Estimated Profit', `Net Margin: ${netMargin.toFixed(2)}%`, netProfit, business.currency],
       ];
       await exportToExcelXLSX(
         `smartcore_pnl_report_${dateStamp}`,
@@ -239,6 +263,11 @@ export const ReportsView: React.FC = () => {
   };
 
   const handleExportPDF = () => {
+    if (!canExport) {
+      alert('Permission Denied: You do not have permission to export financial data (export_financial_data).');
+      return;
+    }
+
     const bizInfo = {
       name: business.name,
       address: business.address,
@@ -248,20 +277,24 @@ export const ReportsView: React.FC = () => {
 
     if (reportType === 'pnl') {
       const pnlRows = [
-        ['1. Gross Revenue', 'Total Invoiced Sales Revenue', formatCurrency(totalRevenue, business.currencySymbol)],
-        ['2. Cost of Sales (COGS)', 'Product Direct Inventory Costs', `(${formatCurrency(totalCogs, business.currencySymbol)})`],
-        ['3. GROSS PROFIT', `Gross Margin: ${grossMargin.toFixed(1)}%`, formatCurrency(grossProfit, business.currencySymbol)],
+        ['1. Gross Invoiced Total', 'Billed Customer Invoices', formatCurrency(grossInvoiced, business.currencySymbol)],
+        ['2. Less: Statutory VAT (7.5%)', 'FIRS Tax Liability (Excluded from Turnover)', `(${formatCurrency(totalVat, business.currencySymbol)})`],
+        ['3. Net Operating Revenue', 'True Business Turnover', formatCurrency(operatingRevenue, business.currencySymbol)],
+        ['4. Cost of Goods Sold (COGS)', 'Product Direct Inventory Costs', `(${formatCurrency(totalCogs, business.currencySymbol)})`],
+        ['5. GROSS PROFIT', `Gross Margin: ${grossMargin.toFixed(1)}%`, formatCurrency(grossProfit, business.currencySymbol)],
         ...expenseByCategory.map(([cat, amt]) => [
-          `4. Operating Overhead: ${cat}`,
+          `6. Operating Overhead: ${cat}`,
           'Recurring & Facility Expenses',
           `(${formatCurrency(amt, business.currencySymbol)})`,
         ]),
-        ['5. Total Operating Expenses', 'Total Operational Costs', `(${formatCurrency(totalExpenses, business.currencySymbol)})`],
-        ['6. NET ESTIMATED PROFIT', `Net Profit Margin: ${netMargin.toFixed(1)}%`, formatCurrency(netProfit, business.currencySymbol)],
+        ['7. Total Operating Expenses', 'Total Operational Costs', `(${formatCurrency(totalExpenses, business.currencySymbol)})`],
+        ['8. NET ESTIMATED PROFIT', `Net Profit Margin: ${netMargin.toFixed(1)}%`, formatCurrency(netProfit, business.currencySymbol)],
       ];
       const totalsSummary = [
-        { label: 'Total Sales Revenue:', value: formatCurrency(totalRevenue, business.currencySymbol) },
-        { label: 'Cost of Goods Sold:', value: `(${formatCurrency(totalCogs, business.currencySymbol)})` },
+        { label: 'Gross Invoiced Total:', value: formatCurrency(grossInvoiced, business.currencySymbol) },
+        { label: 'Statutory VAT (7.5%):', value: `(${formatCurrency(totalVat, business.currencySymbol)})` },
+        { label: 'Net Operating Revenue:', value: formatCurrency(operatingRevenue, business.currencySymbol) },
+        { label: 'Gross Profit:', value: formatCurrency(grossProfit, business.currencySymbol) },
         { label: 'Operating Expenses:', value: `(${formatCurrency(totalExpenses, business.currencySymbol)})` },
         { label: 'Net Profit:', value: formatCurrency(netProfit, business.currencySymbol) },
       ];
@@ -289,7 +322,7 @@ export const ReportsView: React.FC = () => {
         `Reporting Period: ${periodLabel} · ${activeSales.length} Invoices`,
         ['Invoice #', 'Date', 'Customer', 'Total', 'Paid', 'Status'],
         rows,
-        [{ label: 'Total Invoiced:', value: formatCurrency(totalRevenue, business.currencySymbol) }],
+        [{ label: 'Total Invoiced:', value: formatCurrency(grossInvoiced, business.currencySymbol) }],
         bizInfo
       );
     } else if (reportType === 'expenses') {
@@ -349,18 +382,31 @@ export const ReportsView: React.FC = () => {
     }
   };
 
-  // Check role: Staff cannot access confidential profit and loss reports
-  if (currentUser.role === 'staff' && reportType === 'pnl') {
+  // General Report Permission Check: Users without view_reports cannot access ReportsView
+  if (!canViewReports) {
     return (
-      <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center max-w-lg mx-auto my-12">
+      <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center max-w-lg mx-auto my-12 shadow-2xs">
+        <AlertTriangle className="w-10 h-10 text-amber-500 mx-auto mb-3" />
+        <h2 className="text-base font-bold text-slate-900">Reports Access Restricted</h2>
+        <p className="text-xs text-slate-500 mt-1">
+          You do not have permission to access financial and operational reports (view_reports). Please contact your business owner.
+        </p>
+      </div>
+    );
+  }
+
+  // Executive P&L Permission Check: Users without view_profit cannot access Profit & Loss
+  if (!canViewProfit && reportType === 'pnl') {
+    return (
+      <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center max-w-lg mx-auto my-12 shadow-2xs">
         <AlertTriangle className="w-10 h-10 text-amber-500 mx-auto mb-3" />
         <h2 className="text-base font-bold text-slate-900">Restricted Executive Report</h2>
         <p className="text-xs text-slate-500 mt-1">
-          Full business Profit &amp; Loss statements are restricted to Managers and Business Owners. Please switch your active role or select Sales/Debtors reports.
+          Full business Profit &amp; Loss statements are restricted to Managers and Business Owners. Please select Sales, Expenses, or Debtors reports.
         </p>
         <button
           onClick={() => setReportType('sales')}
-          className="mt-4 px-4 py-2 text-xs font-semibold text-[#4C0196] bg-purple-50 rounded-lg hover:bg-purple-100"
+          className="mt-4 px-4 py-2 text-xs font-semibold text-[#4C0196] bg-purple-50 rounded-lg hover:bg-purple-100 cursor-pointer"
         >
           View Sales Report Instead
         </button>
@@ -463,15 +509,27 @@ export const ReportsView: React.FC = () => {
 
           {/* Statement Table */}
           <div className="space-y-6 text-xs">
-            {/* Revenue */}
+            {/* Revenue Section with VAT separation */}
             <div>
               <div className="flex justify-between py-2 border-b border-slate-200 font-bold text-slate-900 text-sm">
-                <span>1. Operating Revenue (Sales &amp; Tuitions)</span>
-                <span className="font-mono">{formatCurrency(totalRevenue, business.currencySymbol)}</span>
+                <span>1. Net Operating Revenue (Turnover)</span>
+                <span className="font-mono text-[#4C0196]">{formatCurrency(operatingRevenue, business.currencySymbol)}</span>
               </div>
-              <div className="pl-4 py-1.5 flex justify-between text-slate-600">
-                <span>Course Enrollments &amp; Product Sales ({activeSales.length} invoices)</span>
-                <span className="font-mono">{formatCurrency(totalRevenue, business.currencySymbol)}</span>
+              <div className="space-y-1 pt-1.5 pl-4">
+                <div className="flex justify-between text-slate-600">
+                  <span>Gross Invoiced Sales ({activeSales.length} customer invoices)</span>
+                  <span className="font-mono">{formatCurrency(grossInvoiced, business.currencySymbol)}</span>
+                </div>
+                {totalVat > 0 && (
+                  <div className="flex justify-between text-purple-700 bg-purple-50/60 px-2 py-1 rounded">
+                    <span>Less: 7.5% Statutory VAT Collected (FIRS Tax Liability)</span>
+                    <span className="font-mono">-{formatCurrency(totalVat, business.currencySymbol)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-slate-800 font-semibold pt-1 border-t border-slate-100">
+                  <span>Net Turnover Base (Excluding VAT Liability)</span>
+                  <span className="font-mono text-[#4C0196]">{formatCurrency(operatingRevenue, business.currencySymbol)}</span>
+                </div>
               </div>
             </div>
 

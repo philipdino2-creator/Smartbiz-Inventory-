@@ -2,6 +2,8 @@ import {
   calculateSaleItemTotal,
   calculateSaleTotals,
   calculateFinancialMetrics,
+  calculateExpectedCash,
+  calculateReconciliationVariance,
   formatCurrency,
 } from './calculations';
 import { Sale, Expense, Customer, Payable, SaleItem } from '../types';
@@ -176,6 +178,92 @@ export function runCalculationTests(): { passed: boolean; results: string[] } {
   // Test 6: Currency Formatter
   assert(formatCurrency(150000, '₦') === '₦150,000.00', 'Currency format 150000 formatted as ₦150,000.00');
   assert(formatCurrency(-2500, '₦') === '-₦2,500.00', 'Negative currency format handled properly');
+
+  // Test 7: Strict VAT Separation from Operating Revenue & Profit
+  const vatSales: Sale[] = [
+    {
+      id: 's_vat_1',
+      businessId: 'biz1',
+      invoiceNumber: 'INV-VAT-01',
+      date: '2026-10-04',
+      time: '12:00',
+      customerName: 'Obinna Okoye',
+      items: [
+        {
+          id: 'si_v1',
+          productId: 'p_course_1',
+          productName: 'Full-Stack Web Development Course',
+          type: 'service',
+          quantity: 1,
+          unitPrice: 100000,
+          costPrice: 10000,
+          discount: 0,
+          total: 100000,
+        },
+      ],
+      subtotal: 100000,
+      discount: 0,
+      taxAmount: 7500, // 7.5% VAT
+      totalAmount: 107500, // Gross Invoiced Total
+      paymentMethod: 'Bank Transfer',
+      paymentStatus: 'paid',
+      amountPaid: 107500,
+      balanceDue: 0,
+      recordedByUserId: 'u1',
+      recordedByUserName: 'Admin',
+      createdAt: '2026-10-04T12:00:00',
+      updatedAt: '2026-10-04T12:00:00',
+    },
+  ];
+
+  const vatExpenses: Expense[] = [
+    {
+      id: 'e_vat_1',
+      businessId: 'biz1',
+      date: '2026-10-04',
+      time: '14:00',
+      category: 'Office Internet',
+      description: 'Monthly Fibre Internet Subscription',
+      amount: 25000,
+      paymentMethod: 'Bank Transfer',
+      vendorName: 'MainOne Technologies',
+      recordedByUserId: 'u1',
+      recordedByUserName: 'Admin',
+      createdAt: '2026-10-04T14:00:00',
+      updatedAt: '2026-10-04T14:00:00',
+    },
+  ];
+
+  const vatMetrics = calculateFinancialMetrics(vatSales, vatExpenses, [], [], '2026-10-04');
+  // Gross Invoiced = 107,500
+  // VAT Collected = 7,500
+  // Net Operating Revenue = 100,000 (excluding VAT)
+  // COGS = 10,000
+  // Gross Profit = 100,000 - 10,000 = 90,000
+  // Operating Expenses = 25,000
+  // Net Profit = 90,000 - 25,000 = 65,000 (Does NOT treat VAT as revenue/profit!)
+  assert(vatMetrics.todayGrossInvoiced === 107500, 'VAT separation: Gross invoice total is ₦107,500');
+  assert(vatMetrics.todayVatCollected === 7500, 'VAT separation: VAT collected liability is ₦7,500');
+  assert(vatMetrics.todayOperatingRevenue === 100000, 'VAT separation: Net Operating Revenue is ₦100,000 (excluding VAT)');
+  assert(vatMetrics.todayGrossProfit === 90000, 'VAT separation: Gross Profit is ₦90,000 (Operating Revenue - COGS)');
+  assert(vatMetrics.todayProfit === 65000, 'VAT separation: Net Profit is ₦65,000 (excludes VAT tax liability)');
+
+  // Test 8: Daily Cash Reconciliation Formulas
+  // Expected Cash = Float (20,000) + Cash Sales (50,000) + Debt Collections (10,000) - Cash Expenses (15,000) - Cash Drop (5,000) = 60,000
+  const expectedCash1 = calculateExpectedCash(20000, 50000, 10000, 15000, 5000);
+  assert(expectedCash1 === 60000, 'Reconciliation: Expected cash calculated correctly as ₦60,000');
+
+  // Exact Match Variance
+  const balancedResult = calculateReconciliationVariance(60000, 60000);
+  assert(balancedResult.variance === 0 && balancedResult.isBalanced === true && balancedResult.status === 'balanced', 'Reconciliation: Exact cash match variance is 0 and balanced');
+
+  // Cash Shortage Variance (Actual 58,000 vs Expected 60,000 = -2,000 shortage)
+  const shortageResult = calculateReconciliationVariance(58000, 60000);
+  assert(shortageResult.variance === -2000 && shortageResult.isBalanced === false && shortageResult.status === 'shortage', 'Reconciliation: Cash shortage detected (-₦2,000)');
+
+  // Cash Surplus Variance (Actual 63,500 vs Expected 60,000 = +3,500 surplus)
+  const surplusResult = calculateReconciliationVariance(63500, 60000);
+  assert(surplusResult.variance === 3500 && surplusResult.isBalanced === false && surplusResult.status === 'surplus', 'Reconciliation: Cash surplus detected (+₦3,500)');
 
   return { passed: allPassed, results };
 }

@@ -34,6 +34,9 @@ export const ALL_PERMISSIONS: Permission[] = [
   'manage_permissions',
   'manage_categories',
   'manage_recurring_expenses',
+  // Daily Reconciliation
+  'view_reconciliation',
+  'manage_reconciliation',
   // Audit
   'view_audit_log',
 ];
@@ -89,6 +92,12 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
     ],
   },
   {
+    id: 'reconciliation',
+    name: 'Daily Business Reconciliation',
+    description: 'Cash drawer float, end-of-day register closing, and variance reporting',
+    permissions: ['view_reconciliation', 'manage_reconciliation'],
+  },
+  {
     id: 'audit',
     name: 'Security & Audit Log',
     description: 'View chronological audit trail of all financial and system actions',
@@ -136,6 +145,10 @@ export const PERMISSION_LABELS: Record<Permission, { label: string; description:
   manage_categories: { label: 'Manage Categories', description: 'Create and edit expense categories' },
   manage_recurring_expenses: { label: 'Manage Recurring', description: 'Configure recurring expense schedules' },
 
+  // Daily Reconciliation
+  view_reconciliation: { label: 'View Register & Balancing', description: 'Inspect daily cash drawer status and closing history' },
+  manage_reconciliation: { label: 'Manage Day Closing', description: 'Open business days, count till cash, and close reconciliation' },
+
   // Audit
   view_audit_log: { label: 'View Audit Log', description: 'Inspect immutable system event history' },
 };
@@ -173,6 +186,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'export_financial_data',
     'manage_categories',
     'manage_recurring_expenses',
+    'view_reconciliation',
+    'manage_reconciliation',
     'view_audit_log',
   ],
 

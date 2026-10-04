@@ -122,20 +122,22 @@ export const MobileMoreDrawer: React.FC<MobileMoreDrawerProps> = ({
           })}
         </div>
 
-        {/* Quick Demo Reset for Mobile */}
-        <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
-          <button
-            onClick={() => {
-              resetToDemoData();
-              onClose();
-            }}
-            className="flex items-center gap-1.5 text-xs text-amber-800 font-medium hover:underline py-2"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span>Reset Demo Records</span>
-          </button>
-          <span className="text-[10px] text-slate-400">Smartcore v1.0 MVP</span>
-        </div>
+        {/* Quick Demo Reset for Mobile (Owner only) */}
+        {currentUser.role === 'owner' && (
+          <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+            <button
+              onClick={() => {
+                resetToDemoData();
+                onClose();
+              }}
+              className="flex items-center gap-1.5 text-xs text-amber-800 font-medium hover:underline py-2"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Reset Demo Records</span>
+            </button>
+            <span className="text-[10px] text-slate-400">Smartcore v1.0 MVP</span>
+          </div>
+        )}
       </div>
     </div>
   );

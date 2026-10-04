@@ -34,6 +34,9 @@ export type Permission =
   | 'manage_permissions'
   | 'manage_categories'
   | 'manage_recurring_expenses'
+  // Daily Reconciliation
+  | 'view_reconciliation'
+  | 'manage_reconciliation'
   // Audit
   | 'view_audit_log';
 
@@ -237,25 +240,90 @@ export interface AuditLog {
   userId: string;
   userName: string;
   userRole: UserRole;
-  action: 'create' | 'update' | 'delete' | 'payment_collected' | 'debt_settled' | 'print_receipt' | 'generate_reminder' | 'update_permissions';
-  entityType: 'sale' | 'expense' | 'customer' | 'payable' | 'product' | 'settings' | 'user';
+  action:
+    | 'create'
+    | 'update'
+    | 'delete'
+    | 'payment_collected'
+    | 'debt_settled'
+    | 'print_receipt'
+    | 'generate_reminder'
+    | 'update_permissions'
+    | 'open_day'
+    | 'close_day'
+    | 'adjust_day'
+    | 'export_data';
+  entityType: 'sale' | 'expense' | 'customer' | 'payable' | 'product' | 'settings' | 'user' | 'reconciliation' | 'catalog' | 'permissions' | 'system';
   entityId: string;
   details: string;
   timestamp: string;
 }
 
+export interface DailyReconciliation {
+  id: string;
+  businessId: string;
+  date: string; // YYYY-MM-DD in Africa/Lagos
+  openedAt: string;
+  closedAt?: string;
+  openedByUserId: string;
+  openedByUserName: string;
+  closedByUserId?: string;
+  closedByUserName?: string;
+  status: 'open' | 'closed' | 'adjusted';
+
+  // Opening Float
+  openingFloat: number;
+  cashDrop?: number; // Optional cash banked / owner cash drops
+
+  // System Calculated Totals
+  systemCashSales: number;
+  systemPosSales: number;
+  systemTransferSales: number;
+  systemDebtCashCollected: number;
+  systemCashExpenses: number;
+
+  // Expected Cash
+  expectedCashInHand: number;
+
+  // Actual Counted
+  actualCashCounted: number;
+  actualPosSettlement: number;
+  actualTransferSettlement: number;
+
+  // Variances
+  cashVariance: number; // actualCashCounted - expectedCashInHand
+  varianceReason?: string;
+  reconciliationNotes?: string;
+
+  // Adjustments after closing
+  isAdjusted?: boolean;
+  adjustedByUserId?: string;
+  adjustmentNotes?: string;
+
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface FinancialMetrics {
-  todaySales: number;
+  todaySales: number; // Invoiced Gross (backward-compatible)
+  todayGrossInvoiced: number;
+  todayVatCollected: number;
+  todayOperatingRevenue: number;
   todayExpenses: number;
-  todayProfit: number;
+  todayProfit: number; // Net profit = operating revenue - cogs - expenses
+  todayGrossProfit: number;
   todayCashCollected: number;
+  todayCogs: number;
+  todaySalesCount: number;
   monthSales: number;
+  monthGrossInvoiced: number;
+  monthVatCollected: number;
+  monthOperatingRevenue: number;
   monthExpenses: number;
+  monthGrossProfit: number;
   monthProfit: number;
   monthCashCollected: number;
+  monthCogs: number;
   totalReceivables: number; // money customers owe us
   totalPayables: number; // money we owe suppliers
-  totalCogs: number;
-  grossProfit: number;
-  netProfit: number;
 }

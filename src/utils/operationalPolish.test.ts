@@ -128,16 +128,20 @@ export function runOperationalPolishTests(): { passed: boolean; results: string[
 
   // Owner has full access to every permission
   const ownerPerms = getUserPermissions(ownerUser);
-  assert(ownerPerms.length === ALL_PERMISSIONS.length, 'Owner has all 26 granular permissions');
+  assert(ownerPerms.length === ALL_PERMISSIONS.length, `Owner has all ${ALL_PERMISSIONS.length} granular permissions`);
   assert(hasPermission(ownerUser, 'manage_business'), 'Owner can manage business settings');
   assert(hasPermission(ownerUser, 'manage_permissions'), 'Owner can manage team permissions');
   assert(hasPermission(ownerUser, 'delete_sale'), 'Owner can delete sales');
   assert(hasPermission(ownerUser, 'view_profit'), 'Owner can view private profit/margins');
+  assert(hasPermission(ownerUser, 'view_reconciliation'), 'Owner can view daily reconciliation');
+  assert(hasPermission(ownerUser, 'manage_reconciliation'), 'Owner can manage daily reconciliation (open/close/adjust)');
 
   // Manager: operational and financial, but cannot manage business core or permissions
   assert(hasPermission(managerUser, 'create_sale'), 'Manager can record sales');
   assert(hasPermission(managerUser, 'view_profit'), 'Manager can view profit & loss');
   assert(hasPermission(managerUser, 'view_reports'), 'Manager can view reports');
+  assert(hasPermission(managerUser, 'view_reconciliation'), 'Manager can view daily reconciliation');
+  assert(hasPermission(managerUser, 'manage_reconciliation'), 'Manager can manage daily reconciliation');
   assert(!hasPermission(managerUser, 'manage_business'), 'Manager CANNOT modify core business owner settings');
   assert(!hasPermission(managerUser, 'manage_permissions'), 'Manager CANNOT modify team permissions');
 
@@ -150,18 +154,28 @@ export function runOperationalPolishTests(): { passed: boolean; results: string[
   assert(!hasPermission(staffUser, 'view_profit'), 'Staff CANNOT view private profit & margins');
   assert(!hasPermission(staffUser, 'export_financial_data'), 'Staff CANNOT export sensitive financial data');
   assert(!hasPermission(staffUser, 'manage_business'), 'Staff CANNOT access business settings');
+  assert(!hasPermission(staffUser, 'view_reconciliation'), 'Staff CANNOT view daily reconciliation (blocked)');
+  assert(!hasPermission(staffUser, 'manage_reconciliation'), 'Staff CANNOT manage daily reconciliation (blocked)');
 
   // Custom User Permission Override
-  const staffWithReportPermission: User = {
+  const staffWithReconPermission: User = {
     ...staffUser,
-    permissions: ['view_sales', 'create_sale', 'view_reports'],
+    permissions: ['view_sales', 'create_sale', 'view_reports', 'view_reconciliation'],
   };
   assert(
-    hasPermission(staffWithReportPermission, 'view_reports'),
+    hasPermission(staffWithReconPermission, 'view_reports'),
     'Staff with custom permission override can view reports'
   );
   assert(
-    !hasPermission(staffWithReportPermission, 'view_profit'),
+    hasPermission(staffWithReconPermission, 'view_reconciliation'),
+    'Staff with custom permission override can view reconciliation'
+  );
+  assert(
+    !hasPermission(staffWithReconPermission, 'manage_reconciliation'),
+    'Staff with custom view_reconciliation STILL cannot close/manage reconciliation'
+  );
+  assert(
+    !hasPermission(staffWithReconPermission, 'view_profit'),
     'Staff with custom permission override still cannot view profit'
   );
 

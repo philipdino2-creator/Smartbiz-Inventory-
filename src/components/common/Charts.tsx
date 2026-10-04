@@ -12,9 +12,10 @@ interface TrendDataPoint {
 interface TrendChartProps {
   data: TrendDataPoint[];
   currencySymbol: string;
+  hideProfit?: boolean;
 }
 
-export const SalesExpenseTrendChart: React.FC<TrendChartProps> = ({ data, currencySymbol }) => {
+export const SalesExpenseTrendChart: React.FC<TrendChartProps> = ({ data, currencySymbol, hideProfit = false }) => {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
 
   const maxVal = Math.max(...data.map(d => Math.max(d.sales, d.expenses)), 10000);
@@ -27,7 +28,9 @@ export const SalesExpenseTrendChart: React.FC<TrendChartProps> = ({ data, curren
       <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-100 gap-2">
         <div>
           <h3 className="text-sm font-semibold text-slate-900">7-Day Sales vs Expenses Performance</h3>
-          <p className="text-xs text-slate-500">Daily cash inflow, operating expenses, and net gain</p>
+          <p className="text-xs text-slate-500">
+            {hideProfit ? 'Daily sales turnover and operational expenses' : 'Daily cash inflow, operating expenses, and net gain'}
+          </p>
         </div>
         <div className="flex items-center gap-4 text-xs font-medium text-slate-600">
           <div className="flex items-center gap-1.5">
@@ -38,10 +41,12 @@ export const SalesExpenseTrendChart: React.FC<TrendChartProps> = ({ data, curren
             <span className="w-2.5 h-2.5 rounded-sm bg-[#7B001C]" />
             <span>Expenses</span>
           </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-2.5 h-0.5 bg-emerald-500" />
-            <span>Net Profit</span>
-          </div>
+          {!hideProfit && (
+            <div className="flex items-center gap-1.5">
+              <span className="w-2.5 h-0.5 bg-emerald-500" />
+              <span>Net Profit</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -139,8 +144,8 @@ export const SalesExpenseTrendChart: React.FC<TrendChartProps> = ({ data, curren
               );
             })}
 
-            {/* Profit Polyline */}
-            {data.length > 1 && (
+            {/* Profit Polyline (Hidden when profit is restricted) */}
+            {!hideProfit && data.length > 1 && (
               <polyline
                 fill="none"
                 stroke="#10b981"
@@ -158,8 +163,8 @@ export const SalesExpenseTrendChart: React.FC<TrendChartProps> = ({ data, curren
               />
             )}
 
-            {/* Profit Points */}
-            {data.map((item, idx) => {
+            {/* Profit Points (Hidden when profit is restricted) */}
+            {!hideProfit && data.map((item, idx) => {
               const colX = paddingX + idx * 70 + 27;
               const profitHeight = (Math.max(0, item.profit) / maxVal) * chartHeight;
               const y = chartHeight - profitHeight + paddingY;
@@ -191,9 +196,11 @@ export const SalesExpenseTrendChart: React.FC<TrendChartProps> = ({ data, curren
               <span className="text-rose-300">
                 Expenses: {formatCurrency(data[hoveredIndex].expenses, currencySymbol)}
               </span>
-              <span className={data[hoveredIndex].profit >= 0 ? 'text-emerald-400 font-bold' : 'text-amber-400 font-bold'}>
-                Net: {formatCurrency(data[hoveredIndex].profit, currencySymbol)}
-              </span>
+              {!hideProfit && (
+                <span className={data[hoveredIndex].profit >= 0 ? 'text-emerald-400 font-bold' : 'text-amber-400 font-bold'}>
+                  Net: {formatCurrency(data[hoveredIndex].profit, currencySymbol)}
+                </span>
+              )}
             </div>
           </div>
         )}

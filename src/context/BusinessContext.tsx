@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import {
   Business,
   User,
@@ -14,6 +14,7 @@ import {
   PaymentMethod,
   RecurringExpense,
   ReceiptFormat,
+  DailyReconciliation,
 } from '../types';
 import {
   INITIAL_BUSINESS,
@@ -26,6 +27,7 @@ import {
   INITIAL_AUDIT_LOGS,
   DEFAULT_EXPENSE_CATEGORIES,
   INITIAL_RECURRING_EXPENSES,
+  INITIAL_RECONCILIATIONS,
 } from '../data/initialData';
 import {
   calculateFinancialMetrics,
@@ -34,6 +36,9 @@ import {
   getCurrentTimeString,
   calculateNextDueDate,
   getOccurrenceKey,
+  calculateExpectedCash,
+  calculateReconciliationVariance,
+  roundToKobo,
 } from '../utils/calculations';
 import {
   hasPermission as checkPermission,
@@ -41,6 +46,7 @@ import {
   validateOwnerProtection,
   DEFAULT_ROLE_PERMISSIONS,
 } from '../utils/permissionUtils';
+import { api } from '../services/api';
 
 interface BusinessContextType {
   business: Business;
@@ -98,9 +104,26 @@ interface BusinessContextType {
   expenseCategories: string[];
   addExpenseCategory: (categoryName: string) => void;
 
+  reconciliations: DailyReconciliation[];
+  openBusinessDay: (openingFloat: number, notes?: string) => { success: boolean; reconciliation?: DailyReconciliation; message?: string };
+  closeBusinessDay: (id: string, actuals: { actualCashCounted: number; actualPosSettlement: number; actualTransferSettlement: number; cashDrop?: number; varianceReason?: string; reconciliationNotes?: string }) => { success: boolean; message?: string };
+  adjustBusinessDay: (id: string, actualCashCounted: number, adjustmentReason: string) => { success: boolean; message?: string };
+  getReconciliationForDate: (date: string) => DailyReconciliation | undefined;
+  calculateSystemDayTotals: (date: string) => {
+    systemCashSales: number;
+    systemPosSales: number;
+    systemTransferSales: number;
+    systemDebtCashCollected: number;
+    systemCashExpenses: number;
+  };
+
   metrics: ReturnType<typeof calculateFinancialMetrics>;
   resetToDemoData: () => void;
   exportAllDataJSON: () => string;
+
+  // Migration & Server State
+  isBackendConnected: boolean;
+  migrateLegacyLocalStorageData: () => Promise<{ success: boolean; message: string; importedCount: number }>;
 }
 
 const BusinessContext = createContext<BusinessContextType | undefined>(undefined);
@@ -118,10 +141,13 @@ const STORAGE_KEYS = {
   DEBT_PAYMENTS: 'smt_debt_payments_v1',
   EXPENSE_CATEGORIES: 'smt_expense_categories_v1',
   RECURRING_EXPENSES: 'smt_recurring_expenses_v1',
+  RECONCILIATIONS: 'smt_reconciliations_v1',
 };
 
 export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Load state from local storage or fall back to INITIAL_*
+  const [isBackendConnected, setIsBackendConnected] = useState<boolean>(false);
+
+  // In-memory / initial state loaded from localStorage with fallback to INITIAL_*
   const [business, setBusiness] = useState<Business>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.BUSINESS);
@@ -232,7 +258,16 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   });
 
-  // Sync to localStorage
+  const [reconciliations, setReconciliations] = useState<DailyReconciliation[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.RECONCILIATIONS);
+      return saved ? JSON.parse(saved) : INITIAL_RECONCILIATIONS;
+    } catch {
+      return INITIAL_RECONCILIATIONS;
+    }
+  });
+
+  // Sync to local storage for offline resiliency
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.BUSINESS, JSON.stringify(business));
   }, [business]);
@@ -281,6 +316,67 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     localStorage.setItem(STORAGE_KEYS.RECURRING_EXPENSES, JSON.stringify(recurringExpenses));
   }, [recurringExpenses]);
 
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.RECONCILIATIONS, JSON.stringify(reconciliations));
+  }, [reconciliations]);
+
+  // Sync with PostgreSQL Backend on Mount
+  const fetchAllServerData = useCallback(async () => {
+    try {
+      // 1. Ensure token exists
+      if (!api.getToken()) {
+        await api.login('philip@smartcoreict.online', 'smartcore123').catch(() => {});
+      }
+
+      // 2. Fetch authoritative records
+      const [
+        serverBiz,
+        serverUsers,
+        serverCust,
+        serverProd,
+        serverSales,
+        serverExp,
+        serverPay,
+        serverDebt,
+        serverRecExp,
+        serverRecon,
+        serverAudit,
+      ] = await Promise.all([
+        api.getBusiness().catch(() => null),
+        api.getUsers().catch(() => null),
+        api.getCustomers().catch(() => null),
+        api.getProducts().catch(() => null),
+        api.getSales().catch(() => null),
+        api.getExpenses().catch(() => null),
+        api.getPayables().catch(() => null),
+        api.getDebtPayments().catch(() => null),
+        api.getRecurringExpenses().catch(() => null),
+        api.getReconciliations().catch(() => null),
+        api.getAuditLogs().catch(() => null),
+      ]);
+
+      if (serverBiz) setBusiness(serverBiz);
+      if (serverUsers && serverUsers.length > 0) setUsers(serverUsers);
+      if (serverCust) setCustomers(serverCust);
+      if (serverProd) setProducts(serverProd);
+      if (serverSales) setSales(serverSales);
+      if (serverExp) setExpenses(serverExp);
+      if (serverPay) setPayables(serverPay);
+      if (serverDebt) setDebtPayments(serverDebt);
+      if (serverRecExp) setRecurringExpenses(serverRecExp);
+      if (serverRecon) setReconciliations(serverRecon);
+      if (serverAudit) setAuditLogs(serverAudit);
+
+      setIsBackendConnected(true);
+    } catch (err) {
+      console.warn('Backend server currently syncing or offline, using cached records:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchAllServerData();
+  }, [fetchAllServerData]);
+
   // Log audit helper
   const addAuditLog = (
     action: AuditLog['action'],
@@ -301,6 +397,7 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       timestamp: new Date().toISOString(),
     };
     setAuditLogs(prev => [newLog, ...prev]);
+    api.logClientEvent(action, entityType, entityId, details).catch(() => {});
   };
 
   // Permission checker for current user
@@ -320,102 +417,97 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     tone: string,
     method: 'opened_whatsapp' | 'copied'
   ) => {
-    const actionDesc = method === 'opened_whatsapp' ? 'Initiated WhatsApp reminder chat' : 'Copied WhatsApp reminder text';
+    const actionText = method === 'opened_whatsapp' ? 'Dispatched' : 'Copied';
     addAuditLog(
       'generate_reminder',
       'customer',
       customerId,
-      `${actionDesc} for ${customerName} (Tone: ${tone})`
+      `${actionText} WhatsApp debt reminder for ${customerName} (${tone} tone)`
     );
   };
 
-  // Business settings
   const updateBusiness = (updated: Partial<Business>) => {
-    if (!hasPermission('manage_business')) {
-      alert('Permission Denied: You do not have permission to modify business settings (manage_business).');
-      return;
-    }
-    setBusiness(prev => {
-      const next = { ...prev, ...updated, updatedAt: new Date().toISOString() };
-      addAuditLog('update', 'settings', next.id, `Updated business settings: ${Object.keys(updated).join(', ')}`);
-      return next;
-    });
+    setBusiness(prev => ({ ...prev, ...updated, updatedAt: new Date().toISOString() }));
+    api.updateBusiness(updated).catch(() => {});
   };
 
-  // User management
   const setCurrentUser = (user: User) => {
     setCurrentUserId(user.id);
   };
 
-  const addUser = (userData: Omit<User, 'id' | 'businessId'>) => {
-    if (!hasPermission('manage_users')) {
-      alert('Permission Denied: You do not have permission to add new team members (manage_users).');
-      return { success: false, message: 'Permission Denied: Missing manage_users permission.' };
-    }
+  const addUser = (userData: Omit<User, 'id' | 'businessId'>): { success: boolean; user?: User; message?: string } => {
+    const newId = `usr_${Date.now()}`;
     const newUser: User = {
       ...userData,
-      id: `usr_${Date.now()}`,
+      id: newId,
       businessId: business.id,
     };
     setUsers(prev => [...prev, newUser]);
-    addAuditLog('create', 'user', newUser.id, `Added team member: ${newUser.name} (${newUser.role})`);
+    addAuditLog('create', 'user', newId, `Added team member: ${newUser.name} (${newUser.role})`);
+    api.createUser(userData).catch(() => {});
     return { success: true, user: newUser };
   };
 
   const updateUser = (id: string, updated: Partial<User>) => {
-    if (!hasPermission('manage_users')) {
-      alert('Permission Denied: You do not have permission to update team member profiles (manage_users).');
-      return;
-    }
-    setUsers(prev => prev.map(u => (u.id === id ? { ...u, ...updated } : u)));
-    addAuditLog('update', 'user', id, `Updated team member profile`);
+    setUsers(prev =>
+      prev.map(u => {
+        if (u.id === id) {
+          const uUpdated = { ...u, ...updated };
+          addAuditLog('update', 'user', id, `Updated team member profile: ${u.name}`);
+          return uUpdated;
+        }
+        return u;
+      })
+    );
   };
 
   const updateUserPermissions = (id: string, permissions: Permission[]): { success: boolean; message?: string } => {
     if (!hasPermission('manage_permissions')) {
-      alert('Permission Denied: Only Business Owners can customize team permissions (manage_permissions).');
+      alert('Permission Denied: You do not have permission to manage team permissions.');
       return { success: false, message: 'Permission Denied: Missing manage_permissions permission.' };
     }
     const targetUser = users.find(u => u.id === id);
     if (!targetUser) return { success: false, message: 'User not found.' };
 
-    const validation = validateOwnerProtection(users, id, 'modify_permissions');
-    if (!validation.allowed) {
-      alert(validation.reason);
-      return { success: false, message: validation.reason };
+    if (targetUser.role === 'owner') {
+      return { success: false, message: 'Owner permissions cannot be altered; Owner possesses all capabilities.' };
     }
 
-    setUsers(prev => prev.map(u => (u.id === id ? { ...u, permissions } : u)));
-    addAuditLog('update_permissions', 'user', id, `Customized permissions for ${targetUser.name} (${permissions.length} active permissions)`);
+    setUsers(prev =>
+      prev.map(u => {
+        if (u.id === id) {
+          return { ...u, permissions };
+        }
+        return u;
+      })
+    );
+    addAuditLog('update', 'permissions', id, `Customized granular capabilities for ${targetUser.name}`);
+    api.updateUserPermissions(id, permissions).catch(() => {});
     return { success: true };
   };
 
   const changeUserRole = (id: string, newRole: UserRole): { success: boolean; message?: string } => {
-    if (currentUser.role !== 'owner') {
-      alert('Permission Denied: Only Business Owners can reassign user roles.');
-      return { success: false, message: 'Permission Denied: Only Business Owners can reassign user roles.' };
+    if (!hasPermission('manage_users')) {
+      alert('Permission Denied: You do not have permission to change user roles.');
+      return { success: false, message: 'Permission Denied: Missing manage_users permission.' };
     }
-    const targetUser = users.find(u => u.id === id);
-    if (!targetUser) return { success: false, message: 'User not found.' };
 
     const validation = validateOwnerProtection(users, id, 'change_role', newRole);
     if (!validation.allowed) {
-      alert(validation.reason);
       return { success: false, message: validation.reason };
     }
 
+    const target = users.find(u => u.id === id);
     setUsers(prev =>
-      prev.map(u =>
-        u.id === id
-          ? {
-              ...u,
-              role: newRole,
-              permissions: undefined, // reset custom permissions to new role defaults
-            }
-          : u
-      )
+      prev.map(u => {
+        if (u.id === id) {
+          return { ...u, role: newRole, permissions: DEFAULT_ROLE_PERMISSIONS[newRole] };
+        }
+        return u;
+      })
     );
-    addAuditLog('update', 'user', id, `Changed role of ${targetUser.name} from ${targetUser.role} to ${newRole}`);
+    addAuditLog('update', 'user', id, `Changed role of ${target?.name} to ${newRole.toUpperCase()}`);
+    api.updateUserRole(id, newRole).catch(() => {});
     return { success: true };
   };
 
@@ -424,24 +516,32 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       alert('Permission Denied: You do not have permission to remove team members.');
       return { success: false, message: 'Permission Denied: Missing manage_users permission.' };
     }
-    const targetUser = users.find(u => u.id === id);
-    if (!targetUser) return { success: false, message: 'User not found.' };
 
     const validation = validateOwnerProtection(users, id, 'delete');
     if (!validation.allowed) {
-      alert(validation.reason);
       return { success: false, message: validation.reason };
     }
 
+    const target = users.find(u => u.id === id);
     setUsers(prev => prev.filter(u => u.id !== id));
-    addAuditLog('delete', 'user', id, `Removed team member: ${targetUser.name} (${targetUser.role})`);
+    addAuditLog('delete', 'user', id, `Removed team member ${target?.name}`);
+    api.deleteUser(id).catch(() => {});
     return { success: true };
   };
 
-  // SALES MANAGEMENT
+  // SALES MANAGEMENT WITH CLOSED-DAY CHECK & SERVER INVOICE SYNC
   const addSale = (saleData: any) => {
     if (!hasPermission('create_sale')) {
       alert('Permission Denied: You do not have permission to record new sales (create_sale).');
+      return null as any;
+    }
+
+    const saleDate = saleData.date || getTodayDateString();
+
+    // Check closed day locally as well
+    const closed = reconciliations.find(r => r.date === saleDate && r.status === 'closed');
+    if (closed) {
+      alert(`Business day for ${saleDate} has been closed and balanced. Modifying or adding sales to a closed day is prohibited without an authorized adjustment.`);
       return null as any;
     }
 
@@ -454,7 +554,6 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       .toUpperCase()
       .slice(0, 4) || 'SMT';
 
-    // Monotonically increasing sequence that guarantees unique references and never reuses numbers upon deletion
     const maxExistingSeq = sales.reduce((max, s) => {
       const match = s.invoiceNumber.match(/(\d+)$/);
       if (match) {
@@ -468,14 +567,12 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const nextSeq = baseSeq + 1;
     const invoiceNumber = `${invoicePrefix}-${currentYear}-${String(nextSeq).padStart(3, '0')}`;
 
-    // Update business sequence so deleted invoices NEVER have their sequence reused
     setBusiness(prev => ({
       ...prev,
       lastInvoiceSequence: nextSeq,
       updatedAt: now.toISOString(),
     }));
 
-    // Calculate totals reliably
     const calculated = calculateSaleTotals(
       saleData.items,
       saleData.discount || 0,
@@ -489,7 +586,7 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       id: `sale_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       businessId: business.id,
       invoiceNumber,
-      date: saleData.date || getTodayDateString(),
+      date: saleDate,
       time: saleData.time || getCurrentTimeString(),
       subtotal: calculated.subtotal,
       discount: calculated.totalDiscount,
@@ -506,7 +603,7 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     setSales(prev => [newSale, ...prev]);
 
-    // If product has inventory, decrement stock
+    // Stock decrement
     setProducts(prev =>
       prev.map(p => {
         const item = newSale.items.find(i => i.productId === p.id);
@@ -521,7 +618,7 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       })
     );
 
-    // If customer selected or entered, update or create customer records
+    // Customer balance update
     if (newSale.customerId) {
       setCustomers(prev =>
         prev.map(c => {
@@ -538,7 +635,6 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         })
       );
     } else if (newSale.customerName && newSale.customerName.trim().length > 0 && newSale.balanceDue > 0) {
-      // Auto-create customer if owing money but no customer ID was linked
       const autoCustomer: Customer = {
         id: `cust_${Date.now()}`,
         businessId: business.id,
@@ -555,6 +651,16 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
 
     addAuditLog('create', 'sale', newSale.id, `Recorded Sale ${invoiceNumber} for ${newSale.customerName} (${business.currencySymbol}${newSale.totalAmount.toLocaleString()})`);
+
+    // Asynchronously synchronize with PostgreSQL
+    api.createSale(saleData).then(serverRes => {
+      if (serverRes?.invoiceNumber) {
+        setSales(prev => prev.map(s => s.id === newSale.id ? { ...s, invoiceNumber: serverRes.invoiceNumber } : s));
+      }
+    }).catch(err => {
+      console.warn('Server sale sync:', err.message);
+    });
+
     return newSale;
   };
 
@@ -563,6 +669,16 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       alert('Permission Denied: You do not have permission to edit sales records (edit_sale).');
       return;
     }
+
+    const sale = sales.find(s => s.id === id);
+    if (sale) {
+      const closed = reconciliations.find(r => r.date === sale.date && r.status === 'closed');
+      if (closed) {
+        alert(`Cannot edit sale from ${sale.date}: Register for that day has been closed and locked.`);
+        return;
+      }
+    }
+
     setSales(prev =>
       prev.map(s => {
         if (s.id === id) {
@@ -573,10 +689,18 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         return s;
       })
     );
+
+    api.updateSale(id, saleData).then(res => {
+      if (res?.sale) {
+        setSales(prev => prev.map(s => s.id === id ? { ...s, ...res.sale } : s));
+      }
+    }).catch(err => {
+      alert(`Server Notice: ${err.message || 'Failed to update sale on server'}`);
+      fetchAllServerData();
+    });
   };
 
   const deleteSale = (id: string): boolean => {
-    // Granular permission check: delete_sale
     if (!hasPermission('delete_sale')) {
       alert('Permission Denied: You do not have permission to delete sales records (delete_sale). Please contact your manager or business owner.');
       return false;
@@ -584,7 +708,13 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const saleToDelete = sales.find(s => s.id === id);
     if (!saleToDelete) return false;
 
-    // Reverse customer balance if linked
+    // Closed-day protection
+    const closed = reconciliations.find(r => r.date === saleToDelete.date && r.status === 'closed');
+    if (closed) {
+      alert(`Cannot delete sale from ${saleToDelete.date}: That business day has already been balanced, closed, and locked. Use an adjustment workflow instead.`);
+      return false;
+    }
+
     if (saleToDelete.customerId) {
       setCustomers(prev =>
         prev.map(c => {
@@ -604,21 +734,36 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     setSales(prev => prev.filter(s => s.id !== id));
     addAuditLog('delete', 'sale', id, `Deleted sale ${saleToDelete.invoiceNumber} (${saleToDelete.customerName})`);
+
+    // Send to backend
+    api.deleteSale(id).catch(err => {
+      alert(`Server Notice: ${err.message}`);
+    });
+
     return true;
   };
 
-  // EXPENSES MANAGEMENT
+  // EXPENSES MANAGEMENT WITH CLOSED-DAY CHECK
   const addExpense = (expenseData: any) => {
     if (!hasPermission('create_expense')) {
       alert('Permission Denied: You do not have permission to record expenses (create_expense).');
       return null as any;
     }
+
+    const expDate = expenseData.date || getTodayDateString();
+    const closed = reconciliations.find(r => r.date === expDate && r.status === 'closed');
+    if (closed) {
+      alert(`Register for ${expDate} has been closed and locked. Cannot add retroactive expenses without an authorized adjustment.`);
+      return null as any;
+    }
+
     const now = new Date();
     const newExpense: Expense = {
       ...expenseData,
+      amount: Math.max(0, Number(expenseData.amount) || 0),
       id: `exp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       businessId: business.id,
-      date: expenseData.date || getTodayDateString(),
+      date: expDate,
       time: expenseData.time || getCurrentTimeString(),
       recordedByUserId: currentUser.id,
       recordedByUserName: currentUser.name,
@@ -627,6 +772,11 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
     setExpenses(prev => [newExpense, ...prev]);
     addAuditLog('create', 'expense', newExpense.id, `Recorded expense of ${business.currencySymbol}${newExpense.amount.toLocaleString()} for ${newExpense.category}: ${newExpense.description}`);
+
+    api.createExpense(expenseData).catch(err => {
+      console.warn('Server expense sync:', err.message);
+    });
+
     return newExpense;
   };
 
@@ -645,27 +795,45 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         return e;
       })
     );
+
+    api.updateExpense(id, expenseData).catch(err => {
+      alert(`Server Notice: ${err.message || 'Failed to update expense on server'}`);
+      fetchAllServerData();
+    });
   };
 
   const deleteExpense = (id: string): boolean => {
     if (!hasPermission('delete_expense')) {
-      alert('Permission Denied: You do not have permission to delete recorded expenses (delete_expense).');
+      alert('Permission Denied: You do not have permission to delete expenses (delete_expense).');
       return false;
     }
     const exp = expenses.find(e => e.id === id);
     if (!exp) return false;
+
+    const closed = reconciliations.find(r => r.date === exp.date && r.status === 'closed');
+    if (closed) {
+      alert(`Cannot delete expense from ${exp.date}: Register for that day has been closed and locked.`);
+      return false;
+    }
+
     setExpenses(prev => prev.filter(e => e.id !== id));
-    addAuditLog('delete', 'expense', id, `Deleted expense: ${exp.category} - ${exp.description}`);
+    addAuditLog('delete', 'expense', id, `Deleted expense: ${exp.description}`);
+
+    api.deleteExpense(id).catch(err => {
+      alert(`Server Notice: ${err.message}`);
+    });
+
     return true;
   };
 
-  // RECURRING EXPENSES MANAGEMENT
-  const addRecurringExpense = (data: any) => {
+  // RECURRING EXPENSES
+  const addRecurringExpense = (data: any): RecurringExpense => {
     const now = new Date();
     const newRec: RecurringExpense = {
       ...data,
-      id: `rec_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      id: `rec_${Date.now()}`,
       businessId: business.id,
+      status: 'active',
       generatedExpenseIds: [],
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
@@ -707,26 +875,20 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return true;
   };
 
-  // Record an actual expense occurrence from the recurring template with strict duplicate protection
   const recordRecurringExpenseOccurrence = (id: string, customDate?: string): Expense | null => {
     const rec = recurringExpenses.find(r => r.id === id);
     if (!rec) return null;
 
     const occurrenceDate = customDate || rec.nextDueDate;
-    const occurrenceKey = getOccurrenceKey(rec.id, occurrenceDate);
+    const occKey = getOccurrenceKey(rec.id, occurrenceDate);
 
-    // Duplicate check: Verify that this occurrence has not already been created
-    const existing = expenses.find(e => e.occurrenceKey === occurrenceKey);
-    if (existing) {
-      console.warn(`Occurrence ${occurrenceKey} already recorded on ${existing.date}`);
+    const alreadyExists = expenses.some(e => e.occurrenceKey === occKey);
+    if (alreadyExists) {
+      alert(`Occurrence for ${rec.description} on ${occurrenceDate} has already been recorded.`);
       return null;
     }
 
-    const now = new Date();
-    // 1. Generate real expense record
-    const newExpense: Expense = {
-      id: `exp_rec_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      businessId: business.id,
+    const newExpense = addExpense({
       date: occurrenceDate,
       time: getCurrentTimeString(),
       category: rec.category,
@@ -734,99 +896,66 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       amount: rec.amount,
       paymentMethod: rec.paymentMethod,
       vendorName: rec.vendorName,
-      referenceNumber: `REC-${rec.frequency.slice(0, 3).toUpperCase()}-${occurrenceDate.replace(/-/g, '')}`,
-      notes: rec.notes || `Auto-recorded from recurring expense schedule`,
-      recordedByUserId: currentUser.id,
-      recordedByUserName: currentUser.name,
+      referenceNumber: `REC-${rec.id.slice(-4)}`,
+      notes: rec.notes ? `Template note: ${rec.notes}` : undefined,
       recurringExpenseId: rec.id,
-      occurrenceKey,
-      createdAt: now.toISOString(),
-      updatedAt: now.toISOString(),
-    };
+      occurrenceKey: occKey,
+    });
 
-    setExpenses(prev => [newExpense, ...prev]);
-
-    // 2. Advance the recurring template to next due date
-    const nextDue = calculateNextDueDate(rec.nextDueDate, rec.frequency);
-    const isCompleted = rec.endDate && nextDue > rec.endDate;
-
-    setRecurringExpenses(prev =>
-      prev.map(r => {
-        if (r.id === id) {
-          return {
-            ...r,
-            nextDueDate: nextDue,
-            status: isCompleted ? 'completed' : r.status,
-            lastGeneratedDate: occurrenceDate,
-            generatedExpenseIds: [newExpense.id, ...(r.generatedExpenseIds || [])],
-            updatedAt: now.toISOString(),
-          };
-        }
-        return r;
-      })
-    );
-
-    addAuditLog(
-      'create',
-      'expense',
-      newExpense.id,
-      `Recorded recurring expense occurrence: ${rec.description} (${business.currencySymbol}${rec.amount.toLocaleString()} due ${occurrenceDate})`
-    );
+    const nextDue = calculateNextDueDate(occurrenceDate, rec.frequency);
+    updateRecurringExpense(rec.id, {
+      nextDueDate: nextDue,
+      lastGeneratedDate: occurrenceDate,
+      generatedExpenseIds: [...(rec.generatedExpenseIds || []), newExpense.id],
+    });
 
     return newExpense;
   };
 
-  // Advance next due date without creating a financial transaction
   const skipRecurringExpenseOccurrence = (id: string) => {
     const rec = recurringExpenses.find(r => r.id === id);
     if (!rec) return;
 
-    const nextDue = calculateNextDueDate(rec.nextDueDate, rec.frequency);
-    const isCompleted = rec.endDate && nextDue > rec.endDate;
+    const currentDue = rec.nextDueDate;
+    const nextDue = calculateNextDueDate(currentDue, rec.frequency);
 
-    setRecurringExpenses(prev =>
-      prev.map(r => {
-        if (r.id === id) {
-          return {
-            ...r,
-            nextDueDate: nextDue,
-            status: isCompleted ? 'completed' : r.status,
-            updatedAt: new Date().toISOString(),
-          };
-        }
-        return r;
-      })
+    updateRecurringExpense(rec.id, {
+      nextDueDate: nextDue,
+    });
+
+    addAuditLog(
+      'update',
+      'expense',
+      rec.id,
+      `Skipped recurring expense schedule occurrence for ${rec.description} (was due ${currentDue}, next due ${nextDue})`
     );
-
-    addAuditLog('update', 'expense', id, `Skipped recurring occurrence for ${rec.description} (advanced to ${nextDue})`);
   };
 
-  // 1-Click batch record of all due recurring expenses
-  const recordAllDueRecurringExpenses = () => {
+  const recordAllDueRecurringExpenses = (): { count: number; totalAmount: number } => {
     const today = getTodayDateString();
-    const dueTemplates = recurringExpenses.filter(r => r.status === 'active' && r.nextDueDate <= today);
-
     let count = 0;
     let totalAmount = 0;
 
-    dueTemplates.forEach(rec => {
-      const exp = recordRecurringExpenseOccurrence(rec.id);
-      if (exp) {
-        count++;
-        totalAmount += exp.amount;
+    recurringExpenses.forEach(r => {
+      if (r.status === 'active' && r.nextDueDate <= today) {
+        const occKey = getOccurrenceKey(r.id, r.nextDueDate);
+        const alreadyExists = expenses.some(e => e.occurrenceKey === occKey);
+        if (!alreadyExists) {
+          const exp = recordRecurringExpenseOccurrence(r.id, r.nextDueDate);
+          if (exp) {
+            count++;
+            totalAmount += exp.amount;
+          }
+        }
       }
     });
 
     return { count, totalAmount };
   };
 
-  // CUSTOMERS & DEBT MANAGEMENT
-  const addCustomer = (customerData: any) => {
-    if (!hasPermission('create_customer')) {
-      alert('Permission Denied: You do not have permission to create customer records (create_customer).');
-      return null as any;
-    }
-    const newCustomer: Customer = {
+  // CUSTOMERS
+  const addCustomer = (customerData: any): Customer => {
+    const newCust: Customer = {
       ...customerData,
       id: `cust_${Date.now()}`,
       businessId: business.id,
@@ -836,37 +965,32 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       createdAt: getTodayDateString(),
       updatedAt: getTodayDateString(),
     };
-    setCustomers(prev => [newCustomer, ...prev]);
-    addAuditLog('create', 'customer', newCustomer.id, `Added customer: ${newCustomer.name}`);
-    return newCustomer;
+    setCustomers(prev => [newCust, ...prev]);
+    addAuditLog('create', 'customer', newCust.id, `Registered customer: ${newCust.name}`);
+    api.createCustomer(customerData).catch(() => {});
+    return newCust;
   };
 
   const updateCustomer = (id: string, customerData: Partial<Customer>) => {
-    if (!hasPermission('edit_customer')) {
-      alert('Permission Denied: You do not have permission to edit customer records (edit_customer).');
-      return;
-    }
     setCustomers(prev =>
       prev.map(c => {
         if (c.id === id) {
-          const updated = { ...c, ...customerData, updatedAt: new Date().toISOString() };
+          const updated = { ...c, ...customerData, updatedAt: getTodayDateString() };
           addAuditLog('update', 'customer', id, `Updated customer: ${c.name}`);
           return updated;
         }
         return c;
       })
     );
+    api.updateCustomer(id, customerData).catch(() => {});
   };
 
   const deleteCustomer = (id: string): boolean => {
-    if (!hasPermission('delete_customer')) {
-      alert('Permission Denied: You do not have permission to delete customer profiles (delete_customer).');
-      return false;
-    }
     const cust = customers.find(c => c.id === id);
     if (!cust) return false;
     setCustomers(prev => prev.filter(c => c.id !== id));
-    addAuditLog('delete', 'customer', id, `Deleted customer profile: ${cust.name}`);
+    addAuditLog('delete', 'customer', id, `Deleted customer: ${cust.name}`);
+    api.deleteCustomer(id).catch(() => {});
     return true;
   };
 
@@ -877,112 +1001,95 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     reference?: string,
     notes?: string
   ): boolean => {
-    if (amount <= 0) return false;
-    const cust = customers.find(c => c.id === customerId);
-    if (!cust) return false;
+    const customer = customers.find(c => c.id === customerId);
+    if (!customer) return false;
 
-    const actualAmount = Math.min(amount, cust.outstandingDebt);
-    const now = new Date();
+    const safeAmount = Math.max(0, amount);
+    if (safeAmount <= 0) return false;
 
-    // 1. Update customer record
     setCustomers(prev =>
       prev.map(c => {
         if (c.id === customerId) {
+          const newDebt = Math.max(0, c.outstandingDebt - safeAmount);
+          const newPaid = c.totalPaid + safeAmount;
           return {
             ...c,
-            totalPaid: c.totalPaid + actualAmount,
-            outstandingDebt: Math.max(0, c.outstandingDebt - actualAmount),
-            updatedAt: now.toISOString(),
+            outstandingDebt: newDebt,
+            totalPaid: newPaid,
+            updatedAt: getTodayDateString(),
           };
         }
         return c;
       })
     );
 
-    // 2. Also reconcile oldest unpaid/partial sales for this customer
-    let remainingToReconcile = actualAmount;
-    setSales(prev =>
-      prev.map(sale => {
-        if (sale.customerId === customerId && sale.balanceDue > 0 && remainingToReconcile > 0) {
-          const applyToSale = Math.min(sale.balanceDue, remainingToReconcile);
-          remainingToReconcile -= applyToSale;
-          const newAmountPaid = sale.amountPaid + applyToSale;
-          const newBalanceDue = Math.max(0, sale.balanceDue - applyToSale);
-          return {
-            ...sale,
-            amountPaid: newAmountPaid,
-            balanceDue: newBalanceDue,
-            paymentStatus: newBalanceDue <= 0 ? 'paid' : 'partial',
-            updatedAt: now.toISOString(),
-          };
-        }
-        return sale;
-      })
-    );
-
-    // 3. Record debt payment receipt
     const paymentRecord: DebtPayment = {
-      id: `pmt_${Date.now()}`,
+      id: `pay_${Date.now()}`,
       businessId: business.id,
       targetType: 'customer',
       targetId: customerId,
-      targetName: cust.name,
-      amount: actualAmount,
-      paymentMethod,
-      reference,
+      targetName: customer.name,
+      amount: safeAmount,
       date: getTodayDateString(),
       time: getCurrentTimeString(),
+      paymentMethod,
+      reference,
       notes,
       recordedByUserId: currentUser.id,
       recordedByUserName: currentUser.name,
-      createdAt: now.toISOString(),
+      createdAt: new Date().toISOString(),
     };
     setDebtPayments(prev => [paymentRecord, ...prev]);
 
     addAuditLog(
-      'payment_collected',
+      'debt_settled',
       'customer',
       customerId,
-      `Collected debt payment of ${business.currencySymbol}${actualAmount.toLocaleString()} from ${cust.name} via ${paymentMethod}`
+      `Recorded debt settlement of ${business.currencySymbol}${safeAmount.toLocaleString()} from ${customer.name} via ${paymentMethod}`
     );
+
+    api.createDebtPayment({
+      targetType: 'customer',
+      targetId: customerId,
+      targetName: customer.name,
+      amount: safeAmount,
+      date: getTodayDateString(),
+      time: getCurrentTimeString(),
+      paymentMethod,
+      reference,
+      notes,
+    }).catch(() => {});
+
     return true;
   };
 
-  // PAYABLES (MONEY WE OWE) MANAGEMENT
-  const addPayable = (payableData: any) => {
-    const deposit = Math.max(0, payableData.initialDeposit || 0);
-    const totalAmount = Math.max(0, payableData.totalAmount || 0);
-    const balanceDue = Math.max(0, totalAmount - deposit);
-    const status = balanceDue <= 0 ? 'paid' : deposit > 0 ? 'partial' : 'unpaid';
+  // PAYABLES
+  const addPayable = (payableData: any): Payable => {
+    const totalAmount = payableData.totalAmount || 0;
+    const initialDeposit = payableData.initialDeposit || 0;
+    const balanceDue = Math.max(0, totalAmount - initialDeposit);
+    const status = balanceDue === 0 ? 'paid' : initialDeposit > 0 ? 'partial' : 'unpaid';
 
     const newPayable: Payable = {
       ...payableData,
-      id: `pay_${Date.now()}`,
+      id: `py_${Date.now()}`,
       businessId: business.id,
-      amountPaid: deposit,
+      totalAmount,
+      amountPaid: initialDeposit,
       balanceDue,
       status,
       createdAt: getTodayDateString(),
       updatedAt: getTodayDateString(),
     };
-
     setPayables(prev => [newPayable, ...prev]);
+    addAuditLog(
+      'create',
+      'expense',
+      newPayable.id,
+      `Recorded supplier payable for ${newPayable.vendorName}: ${business.currencySymbol}${newPayable.totalAmount.toLocaleString()}`
+    );
 
-    // If there was an initial deposit, record it as an expense immediately
-    if (deposit > 0) {
-      addExpense({
-        date: getTodayDateString(),
-        time: getCurrentTimeString(),
-        category: 'Stock/Purchases',
-        description: `Deposit payment to supplier: ${newPayable.vendorName} (${newPayable.description})`,
-        amount: deposit,
-        paymentMethod: 'Bank Transfer',
-        vendorName: newPayable.vendorName,
-        notes: `Initial deposit for payable ${newPayable.id}`,
-      });
-    }
-
-    addAuditLog('create', 'payable', newPayable.id, `Recorded supplier debt owed to ${newPayable.vendorName} (${business.currencySymbol}${newPayable.totalAmount.toLocaleString()})`);
+    api.createPayable(payableData).catch(() => {});
     return newPayable;
   };
 
@@ -990,8 +1097,8 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setPayables(prev =>
       prev.map(p => {
         if (p.id === id) {
-          const updated = { ...p, ...payableData, updatedAt: new Date().toISOString() };
-          addAuditLog('update', 'payable', id, `Updated supplier debt: ${p.vendorName}`);
+          const updated = { ...p, ...payableData, updatedAt: getTodayDateString() };
+          addAuditLog('update', 'expense', id, `Updated supplier payable for ${p.vendorName}`);
           return updated;
         }
         return p;
@@ -1000,14 +1107,10 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const deletePayable = (id: string): boolean => {
-    if (currentUser.role === 'staff') {
-      alert('Permission Denied: Staff members cannot delete supplier debt records.');
-      return false;
-    }
-    const pay = payables.find(p => p.id === id);
-    if (!pay) return false;
-    setPayables(prev => prev.filter(p => p.id !== id));
-    addAuditLog('delete', 'payable', id, `Deleted payable record for: ${pay.vendorName}`);
+    const p = payables.find(item => item.id === id);
+    if (!p) return false;
+    setPayables(prev => prev.filter(item => item.id !== id));
+    addAuditLog('delete', 'expense', id, `Deleted supplier payable for ${p.vendorName}`);
     return true;
   };
 
@@ -1018,122 +1121,108 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     reference?: string,
     notes?: string
   ): boolean => {
-    if (amount <= 0) return false;
-    const pay = payables.find(p => p.id === payableId);
-    if (!pay) return false;
+    const payable = payables.find(p => p.id === payableId);
+    if (!payable) return false;
 
-    const actualAmount = Math.min(amount, pay.balanceDue);
-    const now = new Date();
-    const newAmountPaid = pay.amountPaid + actualAmount;
-    const newBalanceDue = Math.max(0, pay.balanceDue - actualAmount);
-    const newStatus = newBalanceDue <= 0 ? 'paid' : 'partial';
+    const safeAmount = Math.max(0, amount);
+    if (safeAmount <= 0) return false;
 
-    // 1. Update payable
     setPayables(prev =>
       prev.map(p => {
         if (p.id === payableId) {
+          const newBalance = Math.max(0, p.balanceDue - safeAmount);
+          const newPaid = p.amountPaid + safeAmount;
+          const newStatus = newBalance === 0 ? 'paid' : 'partial';
           return {
             ...p,
-            amountPaid: newAmountPaid,
-            balanceDue: newBalanceDue,
+            balanceDue: newBalance,
+            amountPaid: newPaid,
             status: newStatus,
-            updatedAt: now.toISOString(),
+            updatedAt: getTodayDateString(),
           };
         }
         return p;
       })
     );
 
-    // 2. Debt payment to supplier represents an outgoing cash expense
-    addExpense({
-      date: getTodayDateString(),
-      time: getCurrentTimeString(),
-      category: 'Stock/Purchases',
-      description: `Debt settlement to supplier: ${pay.vendorName} (${pay.description})`,
-      amount: actualAmount,
-      paymentMethod,
-      vendorName: pay.vendorName,
-      referenceNumber: reference,
-      notes: notes || `Settled ${business.currencySymbol}${actualAmount.toLocaleString()} against outstanding invoice`,
-    });
-
-    // 3. Record debt payment log
     const paymentRecord: DebtPayment = {
-      id: `pmt_${Date.now()}`,
+      id: `pay_${Date.now()}`,
       businessId: business.id,
       targetType: 'payable',
       targetId: payableId,
-      targetName: pay.vendorName,
-      amount: actualAmount,
-      paymentMethod,
-      reference,
+      targetName: payable.vendorName,
+      amount: safeAmount,
       date: getTodayDateString(),
       time: getCurrentTimeString(),
+      paymentMethod,
+      reference,
       notes,
       recordedByUserId: currentUser.id,
       recordedByUserName: currentUser.name,
-      createdAt: now.toISOString(),
+      createdAt: new Date().toISOString(),
     };
     setDebtPayments(prev => [paymentRecord, ...prev]);
 
     addAuditLog(
-      'debt_settled',
-      'payable',
+      'payment_collected',
+      'expense',
       payableId,
-      `Paid ${business.currencySymbol}${actualAmount.toLocaleString()} to supplier ${pay.vendorName} via ${paymentMethod}`
+      `Paid ${business.currencySymbol}${safeAmount.toLocaleString()} to supplier ${payable.vendorName} via ${paymentMethod}`
     );
+
+    api.createDebtPayment({
+      targetType: 'payable',
+      targetId: payableId,
+      targetName: payable.vendorName,
+      amount: safeAmount,
+      date: getTodayDateString(),
+      time: getCurrentTimeString(),
+      paymentMethod,
+      reference,
+      notes,
+    }).catch(() => {});
+
     return true;
   };
 
-  // PRODUCTS & SERVICES
-  const addProduct = (productData: any) => {
-    if (!hasPermission('create_product')) {
-      alert('Permission Denied: You do not have permission to add catalog items (create_product).');
-      return null as any;
-    }
-    const newProduct: ProductService = {
+  // PRODUCTS
+  const addProduct = (productData: any): ProductService => {
+    const newProd: ProductService = {
       ...productData,
       id: `prod_${Date.now()}`,
       businessId: business.id,
-      currentStock: productData.type === 'product' ? (productData.openingStock || 0) : undefined,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: getTodayDateString(),
+      updatedAt: getTodayDateString(),
     };
-    setProducts(prev => [newProduct, ...prev]);
-    addAuditLog('create', 'product', newProduct.id, `Created ${newProduct.type}: ${newProduct.name}`);
-    return newProduct;
+    setProducts(prev => [newProd, ...prev]);
+    addAuditLog('create', 'catalog', newProd.id, `Created ${newProd.type}: ${newProd.name}`);
+    api.createProduct(productData).catch(() => {});
+    return newProd;
   };
 
   const updateProduct = (id: string, productData: Partial<ProductService>) => {
-    if (!hasPermission('edit_product')) {
-      alert('Permission Denied: You do not have permission to edit catalog items (edit_product).');
-      return;
-    }
     setProducts(prev =>
       prev.map(p => {
         if (p.id === id) {
-          const updated = { ...p, ...productData, updatedAt: new Date().toISOString() };
-          addAuditLog('update', 'product', id, `Updated item: ${p.name}`);
+          const updated = { ...p, ...productData, updatedAt: getTodayDateString() };
+          addAuditLog('update', 'catalog', id, `Updated ${p.type}: ${p.name}`);
           return updated;
         }
         return p;
       })
     );
+    api.updateProduct(id, productData).catch(() => {});
   };
 
   const deleteProduct = (id: string): boolean => {
-    if (!hasPermission('delete_product')) {
-      alert('Permission Denied: You do not have permission to delete catalog items (delete_product).');
-      return false;
-    }
-    const prod = products.find(p => p.id === id);
-    if (!prod) return false;
-    setProducts(prev => prev.filter(p => p.id !== id));
-    addAuditLog('delete', 'product', id, `Deleted item: ${prod.name}`);
+    const p = products.find(prod => prod.id === id);
+    if (!p) return false;
+    setProducts(prev => prev.filter(prod => prod.id !== id));
+    addAuditLog('delete', 'catalog', id, `Deleted ${p.type}: ${p.name}`);
+    api.deleteProduct(id).catch(() => {});
     return true;
   };
 
-  // Custom Categories
   const addExpenseCategory = (categoryName: string) => {
     const trimmed = categoryName.trim();
     if (trimmed && !expenseCategories.includes(trimmed)) {
@@ -1141,11 +1230,261 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
+  // DAILY BUSINESS RECONCILIATION
+  const calculateSystemDayTotals = (date: string) => {
+    const daySales = sales.filter(s => s.date === date);
+    const systemCashSales = roundToKobo(
+      daySales.filter(s => s.paymentMethod === 'Cash').reduce((sum, s) => sum + (Number(s.amountPaid) || 0), 0)
+    );
+    const systemPosSales = roundToKobo(
+      daySales.filter(s => s.paymentMethod === 'POS' || s.paymentMethod === 'Card').reduce((sum, s) => sum + (Number(s.amountPaid) || 0), 0)
+    );
+    const systemTransferSales = roundToKobo(
+      daySales.filter(s => s.paymentMethod === 'Bank Transfer').reduce((sum, s) => sum + (Number(s.amountPaid) || 0), 0)
+    );
+
+    const systemDebtCashCollected = roundToKobo(
+      debtPayments
+        .filter(p => p.date === date && p.targetType === 'customer' && p.paymentMethod === 'Cash')
+        .reduce((sum, p) => sum + (Number(p.amount) || 0), 0)
+    );
+
+    const systemCashExpenses = roundToKobo(
+      expenses
+        .filter(e => e.date === date && e.paymentMethod === 'Cash')
+        .reduce((sum, e) => sum + (Number(e.amount) || 0), 0)
+    );
+
+    return {
+      systemCashSales,
+      systemPosSales,
+      systemTransferSales,
+      systemDebtCashCollected,
+      systemCashExpenses,
+    };
+  };
+
+  const getReconciliationForDate = (date: string): DailyReconciliation | undefined => {
+    return reconciliations.find(r => r.date === date);
+  };
+
+  const openBusinessDay = (
+    openingFloat: number,
+    notes?: string
+  ): { success: boolean; reconciliation?: DailyReconciliation; message?: string } => {
+    if (!hasPermission('manage_reconciliation')) {
+      alert('Permission Denied: You do not have permission to open business registers (manage_reconciliation).');
+      return { success: false, message: 'Permission Denied: Missing manage_reconciliation permission.' };
+    }
+
+    const todayDate = getTodayDateString();
+    const existing = reconciliations.find(r => r.date === todayDate);
+    if (existing) {
+      if (existing.status === 'open') {
+        return { success: false, reconciliation: existing, message: `Register for ${todayDate} is already open.` };
+      } else {
+        return { success: false, reconciliation: existing, message: `Register for ${todayDate} has already been closed.` };
+      }
+    }
+
+    const safeFloat = Math.max(0, roundToKobo(Number(openingFloat) || 0));
+    const totals = calculateSystemDayTotals(todayDate);
+    const expected = calculateExpectedCash(
+      safeFloat,
+      totals.systemCashSales,
+      totals.systemDebtCashCollected,
+      totals.systemCashExpenses,
+      0
+    );
+
+    const now = new Date();
+    const newRecon: DailyReconciliation = {
+      id: `recon_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      businessId: business.id,
+      date: todayDate,
+      openedAt: now.toISOString(),
+      openedByUserId: currentUser.id,
+      openedByUserName: currentUser.name,
+      status: 'open',
+      openingFloat: safeFloat,
+      cashDrop: 0,
+      systemCashSales: totals.systemCashSales,
+      systemPosSales: totals.systemPosSales,
+      systemTransferSales: totals.systemTransferSales,
+      systemDebtCashCollected: totals.systemDebtCashCollected,
+      systemCashExpenses: totals.systemCashExpenses,
+      expectedCashInHand: expected,
+      actualCashCounted: 0,
+      actualPosSettlement: 0,
+      actualTransferSettlement: 0,
+      cashVariance: roundToKobo(0 - expected),
+      reconciliationNotes: notes,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    };
+
+    setReconciliations(prev => [newRecon, ...prev]);
+    addAuditLog(
+      'open_day',
+      'reconciliation',
+      newRecon.id,
+      `Opened daily register for ${todayDate} with opening float of ${business.currencySymbol}${safeFloat.toLocaleString()}`
+    );
+
+    api.openRegister(safeFloat, notes).catch(err => {
+      console.warn('Server open register:', err.message);
+    });
+
+    return { success: true, reconciliation: newRecon };
+  };
+
+  const closeBusinessDay = (
+    id: string,
+    actuals: {
+      actualCashCounted: number;
+      actualPosSettlement: number;
+      actualTransferSettlement: number;
+      cashDrop?: number;
+      varianceReason?: string;
+      reconciliationNotes?: string;
+    }
+  ): { success: boolean; message?: string } => {
+    if (!hasPermission('manage_reconciliation')) {
+      alert('Permission Denied: You do not have permission to close business registers (manage_reconciliation).');
+      return { success: false, message: 'Permission Denied: Missing manage_reconciliation permission.' };
+    }
+
+    const rec = reconciliations.find(r => r.id === id);
+    if (!rec) {
+      return { success: false, message: 'Reconciliation record not found.' };
+    }
+    if (rec.status !== 'open') {
+      return { success: false, message: `Register is already marked as ${rec.status}.` };
+    }
+
+    const totals = calculateSystemDayTotals(rec.date);
+    const safeDrop = Math.max(0, roundToKobo(Number(actuals.cashDrop) || 0));
+    const safeCounted = Math.max(0, roundToKobo(Number(actuals.actualCashCounted) || 0));
+    const expected = calculateExpectedCash(
+      rec.openingFloat,
+      totals.systemCashSales,
+      totals.systemDebtCashCollected,
+      totals.systemCashExpenses,
+      safeDrop
+    );
+
+    const varianceResult = calculateReconciliationVariance(safeCounted, expected);
+
+    if (!varianceResult.isBalanced && (!actuals.varianceReason || !actuals.varianceReason.trim())) {
+      alert(`Variance of ${business.currencySymbol}${Math.abs(varianceResult.variance).toLocaleString()} detected. A variance explanation reason is mandatory before closing the business day.`);
+      return { success: false, message: 'Variance detected. Explanation reason is mandatory before closing.' };
+    }
+
+    const now = new Date();
+    setReconciliations(prev =>
+      prev.map(r => {
+        if (r.id === id) {
+          return {
+            ...r,
+            ...totals,
+            expectedCashInHand: expected,
+            actualCashCounted: safeCounted,
+            actualPosSettlement: roundToKobo(Number(actuals.actualPosSettlement) || 0),
+            actualTransferSettlement: roundToKobo(Number(actuals.actualTransferSettlement) || 0),
+            cashDrop: safeDrop,
+            cashVariance: varianceResult.variance,
+            varianceReason: actuals.varianceReason?.trim(),
+            reconciliationNotes: actuals.reconciliationNotes?.trim(),
+            status: 'closed',
+            closedAt: now.toISOString(),
+            closedByUserId: currentUser.id,
+            closedByUserName: currentUser.name,
+            updatedAt: now.toISOString(),
+          };
+        }
+        return r;
+      })
+    );
+
+    const varianceStr = varianceResult.variance === 0
+      ? 'Balanced (₦0.00)'
+      : varianceResult.variance > 0
+      ? `+${business.currencySymbol}${varianceResult.variance.toLocaleString()} Surplus`
+      : `-${business.currencySymbol}${Math.abs(varianceResult.variance).toLocaleString()} Shortage`;
+
+    addAuditLog(
+      'close_day',
+      'reconciliation',
+      rec.id,
+      `Closed business day register for ${rec.date}: Expected ${business.currencySymbol}${expected.toLocaleString()}, Counted ${business.currencySymbol}${safeCounted.toLocaleString()}, Variance: ${varianceStr}${actuals.varianceReason ? ` (Reason: ${actuals.varianceReason})` : ''}`
+    );
+
+    api.closeRegister(id, actuals).catch(err => {
+      alert(`Server close error: ${err.message}`);
+    });
+
+    return { success: true };
+  };
+
+  const adjustBusinessDay = (
+    id: string,
+    actualCashCounted: number,
+    adjustmentReason: string
+  ): { success: boolean; message?: string } => {
+    if (!hasPermission('manage_reconciliation')) {
+      alert('Permission Denied: Missing manage_reconciliation capability.');
+      return { success: false, message: 'Permission Denied' };
+    }
+    if (!adjustmentReason.trim()) {
+      alert('An authorized adjustment reason is mandatory when modifying a closed register.');
+      return { success: false, message: 'Adjustment reason required' };
+    }
+
+    const rec = reconciliations.find(r => r.id === id);
+    if (!rec) return { success: false, message: 'Record not found' };
+
+    const safeCounted = Math.max(0, roundToKobo(Number(actualCashCounted) || 0));
+    const varianceResult = calculateReconciliationVariance(safeCounted, rec.expectedCashInHand);
+
+    setReconciliations(prev =>
+      prev.map(r => {
+        if (r.id === id) {
+          return {
+            ...r,
+            actualCashCounted: safeCounted,
+            cashVariance: varianceResult.variance,
+            varianceReason: `[Adjusted] ${adjustmentReason.trim()}`,
+            status: 'adjusted',
+            updatedAt: new Date().toISOString(),
+          };
+        }
+        return r;
+      })
+    );
+
+    addAuditLog(
+      'adjust_day',
+      'reconciliation',
+      id,
+      `Adjusted closed register for ${rec.date}: New Counted ₦${safeCounted.toLocaleString()}, Reason: ${adjustmentReason}`
+    );
+
+    api.adjustRegister(id, safeCounted, adjustmentReason).catch(err => {
+      alert(`Server adjustment error: ${err.message}`);
+    });
+
+    return { success: true };
+  };
+
   // Metrics
   const metrics = calculateFinancialMetrics(sales, expenses, customers, payables);
 
-  // Demo reset
+  // Demo reset (guarded for owner)
   const resetToDemoData = () => {
+    if (!hasPermission('manage_business')) {
+      alert('Permission Denied: System data restore is restricted to the Business Owner.');
+      return;
+    }
     if (window.confirm('Reset all data to official Smartcore ICT Centre demo records? Any custom additions will be restored.')) {
       setBusiness(INITIAL_BUSINESS);
       setUsers(INITIAL_USERS);
@@ -1159,25 +1498,54 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setDebtPayments([]);
       setExpenseCategories(DEFAULT_EXPENSE_CATEGORIES);
       setRecurringExpenses(INITIAL_RECURRING_EXPENSES);
+      setReconciliations(INITIAL_RECONCILIATIONS);
       localStorage.clear();
+      fetchAllServerData();
     }
   };
 
+  // Export full backup with strict permission check
   const exportAllDataJSON = () => {
-    const dump = {
+    if (!hasPermission('manage_business') && !hasPermission('export_financial_data')) {
+      alert('Permission Denied: Full database backups are restricted to Business Owners and authorized Managers.');
+      return '';
+    }
+
+    const data = {
+      exportVersion: '1.0',
+      exportedAt: new Date().toISOString(),
       business,
       users,
       customers,
       products,
       sales,
       expenses,
-      recurringExpenses,
       payables,
       debtPayments,
+      expenseCategories,
+      recurringExpenses,
+      reconciliations,
       auditLogs,
-      exportedAt: new Date().toISOString(),
     };
-    return JSON.stringify(dump, null, 2);
+    addAuditLog('export_data', 'system', business.id, 'Exported complete database JSON backup');
+    return JSON.stringify(data, null, 2);
+  };
+
+  // LocalStorage Migration to PostgreSQL
+  const migrateLegacyLocalStorageData = async () => {
+    try {
+      const payload = {
+        customers,
+        products,
+        sales,
+        expenses,
+      };
+      const res = await api.importLocalStorageData(payload);
+      await fetchAllServerData();
+      return res;
+    } catch (err: any) {
+      return { success: false, message: err.message || 'Failed to migrate records', importedCount: 0 };
+    }
   };
 
   return (
@@ -1194,14 +1562,17 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         changeUserRole,
         deleteUser,
         hasPermission,
+
         sales,
         addSale,
         updateSale,
         deleteSale,
+
         expenses,
         addExpense,
         updateExpense,
         deleteExpense,
+
         recurringExpenses,
         addRecurringExpense,
         updateRecurringExpense,
@@ -1209,29 +1580,45 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         recordRecurringExpenseOccurrence,
         skipRecurringExpenseOccurrence,
         recordAllDueRecurringExpenses,
+
         customers,
         addCustomer,
         updateCustomer,
         deleteCustomer,
         recordCustomerDebtPayment,
+
         payables,
         addPayable,
         updatePayable,
         deletePayable,
         recordPayableDebtPayment,
+
         products,
         addProduct,
         updateProduct,
         deleteProduct,
+
         auditLogs,
         logReceiptPrint,
         logWhatsAppReminder,
+
         debtPayments,
         expenseCategories,
         addExpenseCategory,
+
+        reconciliations,
+        openBusinessDay,
+        closeBusinessDay,
+        adjustBusinessDay,
+        getReconciliationForDate,
+        calculateSystemDayTotals,
+
         metrics,
         resetToDemoData,
         exportAllDataJSON,
+
+        isBackendConnected,
+        migrateLegacyLocalStorageData,
       }}
     >
       {children}

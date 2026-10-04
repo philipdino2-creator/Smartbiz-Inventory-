@@ -36,8 +36,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenPaySupplier,
   setActiveTab,
 }) => {
-  const { business, sales, expenses, customers, payables, products, recurringExpenses, recordAllDueRecurringExpenses, metrics } = useBusiness();
+  const {
+    business,
+    sales,
+    expenses,
+    customers,
+    payables,
+    products,
+    recurringExpenses,
+    recordAllDueRecurringExpenses,
+    metrics,
+    hasPermission,
+  } = useBusiness();
   const today = getTodayDateString();
+
+  const canViewProfit = hasPermission('view_profit');
+  const canViewReports = hasPermission('view_reports');
 
   // Recurring status counts
   const overdueRecCount = useMemo(() => {
@@ -75,20 +89,29 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         .filter(e => e.date === dateStr)
         .reduce((sum, e) => sum + e.amount, 0);
 
-      const dayCogs = sales
-        .filter(s => s.date === dateStr)
-        .reduce((acc, s) => acc + s.items.reduce((sum, item) => sum + (item.quantity * (item.costPrice || 0)), 0), 0);
+      // Only compute and expose COGS/Profit if user has view_profit permission
+      let dayProfit = 0;
+      if (canViewProfit) {
+        const dayVat = sales
+          .filter(s => s.date === dateStr)
+          .reduce((sum, s) => sum + (s.taxAmount || 0), 0);
+        const dayNetRev = daySales - dayVat;
+        const dayCogs = sales
+          .filter(s => s.date === dateStr)
+          .reduce((acc, s) => acc + s.items.reduce((sum, item) => sum + (item.quantity * (item.costPrice || 0)), 0), 0);
+        dayProfit = dayNetRev - dayCogs - dayExpenses;
+      }
 
       days.push({
         dayLabel,
         date: dateStr,
         sales: daySales,
         expenses: dayExpenses,
-        profit: daySales - dayCogs - dayExpenses,
+        profit: dayProfit,
       });
     }
     return days;
-  }, [sales, expenses]);
+  }, [sales, expenses, canViewProfit]);
 
   // Prepare category breakdown for current month
   const categoryBreakdown = useMemo(() => {
@@ -206,19 +229,26 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           {/* Today's Sales */}
           <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
             <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-xs font-medium">Today's Sales</span>
+              <span className="text-xs font-medium">Today's Invoiced Sales</span>
               <div className="p-1 rounded-md bg-purple-50 text-[#4C0196]">
                 <ArrowDownLeft className="w-4 h-4" />
               </div>
             </div>
             <div className="text-xl sm:text-2xl font-bold font-mono text-slate-900 tabular-nums">
-              {formatCurrency(metrics.todaySales, business.currencySymbol)}
+              {formatCurrency(metrics.todayGrossInvoiced || metrics.todaySales, business.currencySymbol)}
             </div>
-            <div className="text-[11px] text-slate-500 mt-1 flex items-center gap-1">
-              <span>Cash collected:</span>
-              <span className="font-semibold text-slate-700 font-mono">
-                {formatCurrency(metrics.todayCashCollected, business.currencySymbol)}
-              </span>
+            <div className="text-[11px] text-slate-500 mt-1 flex items-center justify-between gap-1">
+              {metrics.todayVatCollected > 0 ? (
+                <span>
+                  Net: <span className="font-semibold text-slate-700 font-mono">{formatCurrency(metrics.todayOperatingRevenue, business.currencySymbol)}</span>
+                  {' · '}
+                  VAT: <span className="font-semibold text-purple-700 font-mono">{formatCurrency(metrics.todayVatCollected, business.currencySymbol)}</span>
+                </span>
+              ) : (
+                <span>
+                  Cash collected: <span className="font-semibold text-slate-700 font-mono">{formatCurrency(metrics.todayCashCollected, business.currencySymbol)}</span>
+                </span>
+              )}
             </div>
           </div>
 
@@ -238,21 +268,38 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           </div>
 
-          {/* Today's Estimated Net Profit */}
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-xs font-medium">Today's Net Gain</span>
-              <div className={`p-1 rounded-md ${metrics.todayProfit >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>
-                {metrics.todayProfit >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+          {/* Card 3: Today's Estimated Net Profit (Restricted to users with view_profit) */}
+          {canViewProfit ? (
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
+              <div className="flex items-center justify-between text-slate-500 mb-1">
+                <span className="text-xs font-medium">Today's Net Gain</span>
+                <div className={`p-1 rounded-md ${metrics.todayProfit >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>
+                  {metrics.todayProfit >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                </div>
+              </div>
+              <div className={`text-xl sm:text-2xl font-bold font-mono tabular-nums ${metrics.todayProfit >= 0 ? 'text-emerald-600' : 'text-amber-600'}`}>
+                {formatCurrency(metrics.todayProfit, business.currencySymbol)}
+              </div>
+              <div className="text-[11px] text-slate-500 mt-1">
+                Net turnover minus direct costs &amp; expenses (excludes VAT)
               </div>
             </div>
-            <div className={`text-xl sm:text-2xl font-bold font-mono tabular-nums ${metrics.todayProfit >= 0 ? 'text-emerald-600' : 'text-amber-600'}`}>
-              {formatCurrency(metrics.todayProfit, business.currencySymbol)}
+          ) : (
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
+              <div className="flex items-center justify-between text-slate-500 mb-1">
+                <span className="text-xs font-medium">Today's Activity &amp; Invoices</span>
+                <div className="p-1 rounded-md bg-blue-50 text-blue-600">
+                  <CheckCircle2 className="w-4 h-4" />
+                </div>
+              </div>
+              <div className="text-xl sm:text-2xl font-bold font-mono text-slate-900 tabular-nums">
+                {metrics.todaySalesCount} Invoices
+              </div>
+              <div className="text-[11px] text-slate-500 mt-1">
+                Cash inflow: <span className="font-semibold text-slate-700 font-mono">{formatCurrency(metrics.todayCashCollected, business.currencySymbol)}</span>
+              </div>
             </div>
-            <div className="text-[11px] text-slate-500 mt-1">
-              Sales minus direct cost &amp; expenses
-            </div>
-          </div>
+          )}
         </div>
       </div>
 
@@ -262,21 +309,27 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
             This Month &amp; Debt Position
           </h2>
-          <button
-            onClick={() => setActiveTab('reports')}
-            className="text-xs font-semibold text-[#4C0196] hover:underline cursor-pointer"
-          >
-            View Full P&amp;L Report →
-          </button>
+          {canViewReports && (
+            <button
+              onClick={() => setActiveTab('reports')}
+              className="text-xs font-semibold text-[#4C0196] hover:underline cursor-pointer"
+            >
+              View Full P&amp;L Report →
+            </button>
+          )}
         </div>
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
           {/* Month Sales */}
           <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
             <span className="text-xs text-slate-500 font-medium block mb-1">Month's Sales</span>
             <div className="text-lg sm:text-xl font-bold font-mono text-slate-900 tabular-nums">
-              {formatCurrency(metrics.monthSales, business.currencySymbol)}
+              {formatCurrency(metrics.monthGrossInvoiced || metrics.monthSales, business.currencySymbol)}
             </div>
-            <span className="text-[11px] text-slate-400 mt-1 block">Month to date</span>
+            <span className="text-[11px] text-slate-400 mt-1 block">
+              {metrics.monthVatCollected > 0
+                ? `Net: ${formatCurrency(metrics.monthOperatingRevenue, business.currencySymbol)}`
+                : 'Month to date'}
+            </span>
           </div>
 
           {/* Month Expenses */}
@@ -358,7 +411,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       {/* CHARTS SECTION: 7-DAY TREND & CATEGORY SHARE */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
-          <SalesExpenseTrendChart data={trendData} currencySymbol={business.currencySymbol} />
+          <SalesExpenseTrendChart
+            data={trendData}
+            currencySymbol={business.currencySymbol}
+            hideProfit={!canViewProfit}
+          />
         </div>
         <div className="lg:col-span-1">
           <ExpenseCategoryBreakdown categories={categoryBreakdown} currencySymbol={business.currencySymbol} />

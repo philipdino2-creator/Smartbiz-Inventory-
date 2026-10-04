@@ -47,7 +47,12 @@ export const SettingsView: React.FC = () => {
     resetToDemoData,
     exportAllDataJSON,
     hasPermission,
+    isBackendConnected,
+    migrateLegacyLocalStorageData,
   } = useBusiness();
+
+  const [isMigrating, setIsMigrating] = useState(false);
+  const [migrationStatus, setMigrationStatus] = useState<string | null>(null);
 
   // Active settings tab
   const [activeTab, setActiveTab] = useState<'profile' | 'permissions' | 'categories' | 'audit'>('profile');
@@ -219,8 +224,18 @@ export const SettingsView: React.FC = () => {
     }
   };
 
+  const canManageBusiness = hasPermission('manage_business');
+  const canManageTeam = hasPermission('manage_permissions') || hasPermission('manage_users');
+  const canManageCategories = hasPermission('manage_categories') || canManageBusiness;
+  const canViewAudit = hasPermission('view_audit_log');
+
   const handleDownloadBackup = () => {
+    if (!canManageBusiness) {
+      alert('Permission Denied: System database backups can only be exported by the Business Owner.');
+      return;
+    }
     const jsonStr = exportAllDataJSON();
+    if (!jsonStr) return;
     const blob = new Blob([jsonStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -230,6 +245,19 @@ export const SettingsView: React.FC = () => {
     link.click();
     document.body.removeChild(link);
   };
+
+  // If user has zero settings permissions, show access restricted message
+  if (!canManageBusiness && !canManageTeam && !canManageCategories && !canViewAudit) {
+    return (
+      <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center max-w-lg mx-auto my-12 shadow-2xs">
+        <Lock className="w-10 h-10 text-amber-500 mx-auto mb-3" />
+        <h2 className="text-base font-bold text-slate-900">Administration Settings Restricted</h2>
+        <p className="text-xs text-slate-500 mt-1">
+          Access to business profile, team permissions, system configurations, and data backups is restricted to authorized administrative roles.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 pb-16">
@@ -810,29 +838,74 @@ export const SettingsView: React.FC = () => {
 
           {/* Data Backup & Factory Reset */}
           <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 space-y-4 shadow-2xs">
-            <div>
-              <h2 className="text-sm font-bold text-slate-900">Data Management &amp; Audit Exports</h2>
-              <p className="text-xs text-slate-500">Download complete encrypted ledger records or reload standard demo state</p>
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-sm font-bold text-slate-900">Data Management &amp; Database Architecture</h2>
+                <p className="text-xs text-slate-500">Authoritative Cloud SQL PostgreSQL persistence and backup exports</p>
+              </div>
+              <div className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full text-[11px] font-bold">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span>PostgreSQL Active</span>
+              </div>
             </div>
 
             <div className="space-y-3 pt-2">
-              <button
-                type="button"
-                onClick={handleDownloadBackup}
-                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl border border-slate-300 transition-colors cursor-pointer"
-              >
-                <Download className="w-4 h-4 text-slate-700" />
-                <span>Export Full Ledger Backup (JSON)</span>
-              </button>
+              {canManageBusiness ? (
+                <>
+                  {/* One-click LocalStorage Migration Button */}
+                  <div className="p-3.5 bg-purple-50/60 border border-purple-200 rounded-xl space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-purple-950">Browser LocalStorage Migration Tool</span>
+                      <span className="text-[10px] uppercase font-bold tracking-wider text-purple-700 bg-purple-100 px-2 py-0.5 rounded">Safe Import</span>
+                    </div>
+                    <p className="text-[11px] text-purple-900 leading-relaxed">
+                      If this browser previously held offline records in localStorage, click below to migrate customers, catalog, sales, and expenses into Cloud SQL without deleting legacy data.
+                    </p>
+                    <button
+                      type="button"
+                      disabled={isMigrating}
+                      onClick={async () => {
+                        setIsMigrating(true);
+                        setMigrationStatus('Migrating records to PostgreSQL...');
+                        const res = await migrateLegacyLocalStorageData();
+                        setIsMigrating(false);
+                        setMigrationStatus(res.message);
+                      }}
+                      className="px-3.5 py-2 text-xs font-bold text-white bg-[#4C0196] hover:bg-[#3b0075] rounded-lg transition-colors cursor-pointer shadow-2xs"
+                    >
+                      {isMigrating ? 'Importing...' : 'Migrate Browser Records to PostgreSQL'}
+                    </button>
+                    {migrationStatus && (
+                      <div className="text-[11px] font-semibold text-emerald-700 mt-1">
+                        ✓ {migrationStatus}
+                      </div>
+                    )}
+                  </div>
 
-              <button
-                type="button"
-                onClick={resetToDemoData}
-                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold text-amber-900 bg-amber-50 hover:bg-amber-100 rounded-xl border border-amber-300 transition-colors cursor-pointer"
-              >
-                <RotateCcw className="w-4 h-4 text-amber-700" />
-                <span>Restore Smartcore ICT Centre Demo Dataset</span>
-              </button>
+                  <button
+                    type="button"
+                    onClick={handleDownloadBackup}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl border border-slate-300 transition-colors cursor-pointer"
+                  >
+                    <Download className="w-4 h-4 text-slate-700" />
+                    <span>Export Full Ledger Backup (JSON)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={resetToDemoData}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold text-amber-900 bg-amber-50 hover:bg-amber-100 rounded-xl border border-amber-300 transition-colors cursor-pointer"
+                  >
+                    <RotateCcw className="w-4 h-4 text-amber-700" />
+                    <span>Restore Smartcore ICT Centre Demo Dataset</span>
+                  </button>
+                </>
+              ) : (
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-500 flex items-center gap-2">
+                  <Lock className="w-4 h-4 text-slate-400 shrink-0" />
+                  <span>Full database backup export and system restore are restricted to the Business Owner.</span>
+                </div>
+              )}
             </div>
           </div>
         </div>

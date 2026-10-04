@@ -1,4 +1,4 @@
-import { Business, User, Customer, ProductService, Sale, Expense, Payable, AuditLog, RecurringExpense } from '../types';
+import { Business, User, Customer, ProductService, Sale, Expense, Payable, AuditLog, RecurringExpense, DailyReconciliation } from '../types';
 import { getTodayDateString } from '../utils/calculations';
 
 const today = getTodayDateString();
@@ -842,6 +842,36 @@ export const INITIAL_RECURRING_EXPENSES: RecurringExpense[] = [
     updatedAt: getOffsetDate(10),
     createdByUserId: 'usr_philip_owner',
     createdByUserName: 'Philip Dino',
+  },
+];
+
+export const INITIAL_RECONCILIATIONS: DailyReconciliation[] = [
+  {
+    id: 'recon_yesterday_01',
+    businessId: 'biz_smartcore_001',
+    date: getOffsetDate(1),
+    openedAt: `${getOffsetDate(1)}T08:00:00Z`,
+    closedAt: `${getOffsetDate(1)}T18:00:00Z`,
+    openedByUserId: 'usr_blessing_mgr',
+    openedByUserName: 'Blessing Chukwuma',
+    closedByUserId: 'usr_blessing_mgr',
+    closedByUserName: 'Blessing Chukwuma',
+    status: 'closed',
+    openingFloat: 20000,
+    cashDrop: 0,
+    systemCashSales: 15000,
+    systemPosSales: 10000,
+    systemTransferSales: 35000,
+    systemDebtCashCollected: 0,
+    systemCashExpenses: 5000,
+    expectedCashInHand: 30000, // 20000 + 15000 - 5000
+    actualCashCounted: 30000,
+    actualPosSettlement: 10000,
+    actualTransferSettlement: 35000,
+    cashVariance: 0,
+    reconciliationNotes: 'Daily register balanced perfectly. All POS receipts verified against Zenith bank settlement.',
+    createdAt: `${getOffsetDate(1)}T08:00:00Z`,
+    updatedAt: `${getOffsetDate(1)}T18:00:00Z`,
   },
 ];
 
