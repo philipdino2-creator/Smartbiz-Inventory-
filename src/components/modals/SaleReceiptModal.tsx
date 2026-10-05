@@ -277,8 +277,8 @@ export const SaleReceiptModal: React.FC<SaleReceiptModalProps> = ({
                 {/* Footer */}
                 <div className="text-center text-[8.5px] space-y-0.5 text-slate-800">
                   <div className="font-semibold">Thank you for your patronage.</div>
-                  <div className="font-bold tracking-wider">Learn. Create. Innovate.</div>
-                  <div className="text-[7.5px] text-slate-500 pt-0.5">*** Smartcore POS Receipt ***</div>
+                  <div className="font-bold tracking-wider">{business.tagline || 'Learn. Create. Innovate.'}</div>
+                  <div className="text-[7.5px] text-slate-500 pt-0.5">*** POS Receipt · Powered by BizFlow ***</div>
                 </div>
               </div>
             )}
@@ -419,8 +419,8 @@ export const SaleReceiptModal: React.FC<SaleReceiptModalProps> = ({
                 {/* Footer Sign-off */}
                 <div className="text-center text-[10px] space-y-1 text-slate-800">
                   <div className="font-semibold">Thank you for your patronage.</div>
-                  <div className="font-bold tracking-wider">Learn. Create. Innovate.</div>
-                  <div className="text-[9px] text-slate-500 pt-0.5">*** Official Smartcore POS Receipt ***</div>
+                  <div className="font-bold tracking-wider">{business.tagline || 'Learn. Create. Innovate.'}</div>
+                  <div className="text-[9px] text-slate-500 pt-0.5">*** Official POS Receipt · Powered by BizFlow ***</div>
                 </div>
               </div>
             )}
@@ -592,7 +592,7 @@ export const SaleReceiptModal: React.FC<SaleReceiptModalProps> = ({
                   </div>
                   <div className="text-center sm:text-right">
                     <p className="font-medium text-slate-700">Thank you for your business!</p>
-                    <p className="text-[10px] text-slate-400">Official Computer Generated Receipt</p>
+                    <p className="text-[10px] text-slate-400">Official Computer Generated Receipt · Powered by BizFlow</p>
                   </div>
                 </div>
               </div>

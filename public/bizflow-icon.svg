@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bfBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4C0196" />
+      <stop offset="60%" stop-color="#6D28D9" />
+      <stop offset="100%" stop-color="#2563EB" />
+    </linearGradient>
+    <linearGradient id="bfFlow1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.95" />
+      <stop offset="100%" stop-color="#E0E7FF" stop-opacity="0.85" />
+    </linearGradient>
+    <linearGradient id="bfFlow2" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38BDF8" />
+      <stop offset="50%" stop-color="#818CF8" />
+      <stop offset="100%" stop-color="#C084FC" />
+    </linearGradient>
+    <filter id="bfShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#1E1B4B" flood-opacity="0.35" />
+    </filter>
+  </defs>
+
+  <!-- Base Rounded Container -->
+  <rect width="512" height="512" rx="128" fill="url(#bfBg)" />
+
+  <!-- Subtle Inner Border Glow -->
+  <rect x="8" y="8" width="496" height="496" rx="120" fill="none" stroke="#FFFFFF" stroke-opacity="0.12" stroke-width="4" />
+
+  <!-- Stylized BizFlow "B" + Momentum Waves -->
+  <g filter="url(#bfShadow)" transform="translate(116, 106)">
+    <!-- Vertical Spine of B -->
+    <path
+      d="M20 20
+         C20 9 29 0 40 0
+         L64 0
+         C75 0 84 9 84 20
+         L84 280
+         C84 291 75 300 64 300
+         L40 300
+         C29 300 20 291 20 280
+         Z"
+      fill="url(#bfFlow1)"
+    />
+
+    <!-- Top Loop (Smooth Flow Arc) -->
+    <path
+      d="M74 16
+         L150 16
+         C196 16 232 48 232 94
+         C232 140 196 172 150 172
+         L74 172
+         Z"
+      fill="none"
+      stroke="url(#bfFlow1)"
+      stroke-width="44"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+
+    <!-- Bottom Dynamic Flow Ribbon (Extending & Sweeping forward) -->
+    <path
+      d="M74 144
+         L170 144
+         C222 144 264 178 264 228
+         C264 278 222 284 170 284
+         L30 284"
+      fill="none"
+      stroke="url(#bfFlow2)"
+      stroke-width="44"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+
+    <!-- Center Accent Dot / Flow Pulse -->
+    <circle cx="150" cy="94" r="14" fill="#6D28D9" />
+    <circle cx="170" cy="224" r="14" fill="#FFFFFF" />
+  </g>
+</svg>

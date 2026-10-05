@@ -27,7 +27,9 @@ import {
   AlertTriangle,
   UserCheck,
   Lock,
+  Info,
 } from 'lucide-react';
+import { BizFlowLogo } from '../common/BizFlowLogo';
 
 export const SettingsView: React.FC = () => {
   const {
@@ -45,6 +47,7 @@ export const SettingsView: React.FC = () => {
     addExpenseCategory,
     auditLogs,
     resetToDemoData,
+    resetLedgerToZero,
     exportAllDataJSON,
     hasPermission,
     isBackendConnected,
@@ -772,7 +775,7 @@ export const SettingsView: React.FC = () => {
           <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 text-xs space-y-2">
             <div className="font-bold text-slate-800 flex items-center gap-2">
               <Shield className="w-4 h-4 text-[#4C0196]" />
-              <span>Smartcore Role &amp; Permission Architecture:</span>
+              <span>BizFlow Role &amp; Permission Architecture:</span>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-[11px] text-slate-600 pt-1">
               <div className="p-2.5 bg-white rounded-xl border border-slate-200">
@@ -889,6 +892,22 @@ export const SettingsView: React.FC = () => {
                   >
                     <Download className="w-4 h-4 text-slate-700" />
                     <span>Export Full Ledger Backup (JSON)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (window.confirm('Are you sure you want to clear the dashboard and reset all sales, expenses, payables, and customer balances to zero for live operational usage? This action cannot be undone.')) {
+                        const res = await resetLedgerToZero();
+                        if (res.success) {
+                          alert('Dashboard and ledger entries have been reset to zero!');
+                        }
+                      }
+                    }}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold text-rose-900 bg-rose-50 hover:bg-rose-100 rounded-xl border border-rose-300 transition-colors cursor-pointer"
+                  >
+                    <RotateCcw className="w-4 h-4 text-rose-700" />
+                    <span>Clear Dashboard &amp; Reset Entries to Zero (Live Usage)</span>
                   </button>
 
                   <button

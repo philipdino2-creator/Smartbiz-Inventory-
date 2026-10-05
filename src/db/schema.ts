@@ -1,4 +1,4 @@
-import { pgTable, text, integer, numeric, boolean, timestamp, json, doublePrecision } from 'drizzle-orm/pg-core';
+import { pgTable, text, integer, numeric, boolean, timestamp, json, doublePrecision, index, uniqueIndex } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 
 // 1. BUSINESSES
@@ -36,7 +36,9 @@ export const users = pgTable('users', {
   passwordHash: text('password_hash'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
-});
+}, (table) => [
+  index('users_business_id_idx').on(table.businessId),
+]);
 
 // 3. CUSTOMERS
 export const customers = pgTable('customers', {
@@ -52,7 +54,9 @@ export const customers = pgTable('customers', {
   outstandingDebt: numeric('outstanding_debt', { precision: 14, scale: 2 }).notNull().default('0.00'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
-});
+}, (table) => [
+  index('customers_business_name_idx').on(table.businessId, table.name),
+]);
 
 // 4. PRODUCTS & SERVICES
 export const products = pgTable('products', {
@@ -71,7 +75,9 @@ export const products = pgTable('products', {
   active: boolean('active').notNull().default(true),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
-});
+}, (table) => [
+  index('products_business_active_idx').on(table.businessId, table.active),
+]);
 
 // 5. SALES
 export const sales = pgTable('sales', {
@@ -96,7 +102,9 @@ export const sales = pgTable('sales', {
   recordedByUserName: text('recorded_by_user_name').notNull(),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
-});
+}, (table) => [
+  index('sales_business_date_time_idx').on(table.businessId, table.date.desc(), table.time.desc()),
+]);
 
 // 6. SALE ITEMS
 export const saleItems = pgTable('sale_items', {
@@ -110,7 +118,9 @@ export const saleItems = pgTable('sale_items', {
   costPrice: numeric('cost_price', { precision: 14, scale: 2 }).notNull().default('0.00'),
   discount: numeric('discount', { precision: 14, scale: 2 }).notNull().default('0.00'),
   total: numeric('total', { precision: 14, scale: 2 }).notNull().default('0.00'),
-});
+}, (table) => [
+  index('sale_items_sale_id_idx').on(table.saleId),
+]);
 
 // 7. EXPENSES
 export const expenses = pgTable('expenses', {
@@ -131,7 +141,9 @@ export const expenses = pgTable('expenses', {
   occurrenceKey: text('occurrence_key'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
-});
+}, (table) => [
+  index('expenses_business_date_idx').on(table.businessId, table.date.desc()),
+]);
 
 // 8. PAYABLES (SUPPLIERS)
 export const payables = pgTable('payables', {
@@ -225,7 +237,9 @@ export const dailyReconciliations = pgTable('daily_reconciliations', {
   reconciliationNotes: text('reconciliation_notes'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
-});
+}, (table) => [
+  uniqueIndex('daily_reconciliations_business_date_unique').on(table.businessId, table.date),
+]);
 
 // 13. AUDIT LOGS
 export const auditLogs = pgTable('audit_logs', {
@@ -240,7 +254,24 @@ export const auditLogs = pgTable('audit_logs', {
   details: text('details').notNull(),
   metadata: json('metadata'),
   timestamp: text('timestamp').notNull(),
-});
+}, (table) => [
+  index('audit_logs_business_timestamp_idx').on(table.businessId, table.timestamp.desc()),
+]);
+
+// 14. SESSIONS (Persistent Authentication Sessions)
+export const sessions = pgTable('sessions', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  businessId: text('business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull(),
+  tokenHash: text('token_hash').notNull().unique(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  lastUsedAt: timestamp('last_used_at', { withTimezone: true }).defaultNow(),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+}, (table) => [
+  index('sessions_user_id_idx').on(table.userId),
+  index('sessions_expires_at_idx').on(table.expiresAt),
+]);
 
 // RELATIONS
 export const businessesRelations = relations(businesses, ({ many }) => ({
@@ -255,6 +286,18 @@ export const businessesRelations = relations(businesses, ({ many }) => ({
   recurringExpenses: many(recurringExpenses),
   dailyReconciliations: many(dailyReconciliations),
   auditLogs: many(auditLogs),
+  sessions: many(sessions),
+}));
+
+export const sessionsRelations = relations(sessions, ({ one }) => ({
+  user: one(users, {
+    fields: [sessions.userId],
+    references: [users.id],
+  }),
+  business: one(businesses, {
+    fields: [sessions.businessId],
+    references: [businesses.id],
+  }),
 }));
 
 export const salesRelations = relations(sales, ({ one, many }) => ({

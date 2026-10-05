@@ -11,6 +11,7 @@ import {
   CalendarClock,
 } from 'lucide-react';
 import { useBusiness } from '../../context/BusinessContext';
+import { BizFlowLogo } from '../common/BizFlowLogo';
 
 interface MobileMoreDrawerProps {
   isOpen: boolean;
@@ -79,12 +80,15 @@ export const MobileMoreDrawer: React.FC<MobileMoreDrawerProps> = ({
         {/* Grab handle */}
         <div className="w-12 h-1.5 bg-slate-200 rounded-full mx-auto" />
 
-        {/* Drawer Header */}
-        <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-          <div>
-            <h3 className="text-base font-bold text-slate-900">{business.name}</h3>
+        {/* Drawer Header with BizFlow Identity */}
+        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+          <div className="space-y-1">
+            <BizFlowLogo size="sm" />
             <p className="text-xs text-slate-500">
-              Active User: <span className="font-semibold text-slate-800">{currentUser.name}</span> ({currentUser.role.toUpperCase()})
+              Workspace: <span className="font-semibold text-slate-800">{business.name || 'Smartcore ICT Centre'}</span>
+            </p>
+            <p className="text-[11px] text-slate-400">
+              Active User: <span className="font-medium text-slate-700">{currentUser.name}</span> ({currentUser.role.toUpperCase()})
             </p>
           </div>
           <button
@@ -135,7 +139,7 @@ export const MobileMoreDrawer: React.FC<MobileMoreDrawerProps> = ({
               <RotateCcw className="w-3.5 h-3.5" />
               <span>Reset Demo Records</span>
             </button>
-            <span className="text-[10px] text-slate-400">Smartcore v1.0 MVP</span>
+            <span className="text-[10px] text-slate-400">BizFlow v2.0</span>
           </div>
         )}
       </div>

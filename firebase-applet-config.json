@@ -3,6 +3,7 @@
   "appId": "1:376375069712:web:e3ded4159e05e37df84e95",
   "apiKey": "AIzaSyB4Cq1A4x7ecfLTi7Gur8_I5FrTkGUmrXU",
   "authDomain": "studied-gecko-gpthm.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-bizflow-7df2f724-37f1-4fe7-bf5d-a692e18bc6d3",
   "storageBucket": "studied-gecko-gpthm.firebasestorage.app",
   "messagingSenderId": "376375069712",
   "measurementId": "",

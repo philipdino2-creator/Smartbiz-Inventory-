@@ -1,6 +1,6 @@
 {
-  "name": "Smartcore Ledger - Small Business Sales & Expense Tracker",
-  "description": "Production-ready sales, expense, debt tracking, and cash flow ledger for Nigerian and small businesses, ICT centres, and service hubs.",
+  "name": "BizFlow",
+  "description": "BizFlow - Business and inventory management software.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

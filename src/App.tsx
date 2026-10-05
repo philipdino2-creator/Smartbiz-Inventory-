@@ -24,10 +24,21 @@ import { GlobalSearchModal } from './components/search/GlobalSearchModal';
 
 import { Sale, Customer, Payable } from './types';
 import { Plus, Check } from 'lucide-react';
+import { SplashScreen } from './components/common/SplashScreen';
+import { LoginModal } from './components/auth/LoginModal';
 
 const AppContent: React.FC = () => {
-  const { customers } = useBusiness();
+  const { business, customers } = useBusiness();
   const [activeTab, setActiveTab] = useState<string>('dashboard');
+  const [showSplash, setShowSplash] = useState(true);
+  const [isLoginOpen, setIsLoginOpen] = useState(false);
+
+  React.useEffect(() => {
+    const timer = setTimeout(() => {
+      setShowSplash(false);
+    }, 750);
+    return () => clearTimeout(timer);
+  }, []);
 
   // Modals state
   const [isRecordSaleOpen, setIsRecordSaleOpen] = useState(false);
@@ -145,6 +156,9 @@ const AppContent: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col text-slate-900 selection:bg-purple-100 selection:text-purple-900">
+      {/* Splash Screen on Initial Load */}
+      {showSplash && <SplashScreen businessName={business.name || 'Smartcore ICT Centre'} />}
+
       {/* Top Bar Contract compliant Navbar */}
       <Navbar
         activeTab={activeTab}
@@ -152,6 +166,7 @@ const AppContent: React.FC = () => {
         onOpenRecordSale={() => setIsRecordSaleOpen(true)}
         onOpenRecordExpense={() => setIsRecordExpenseOpen(true)}
         onOpenSearch={() => setIsSearchOpen(true)}
+        onOpenLogin={() => setIsLoginOpen(true)}
       />
 
       {/* Main Content Area */}
@@ -305,6 +320,12 @@ const AppContent: React.FC = () => {
           setActiveTab('payables');
           handleOpenPaySupplier(payable);
         }}
+      />
+
+      {/* BizFlow Authentication & Session Modal */}
+      <LoginModal
+        isOpen={isLoginOpen}
+        onClose={() => setIsLoginOpen(false)}
       />
 
       {/* Toast Notification */}

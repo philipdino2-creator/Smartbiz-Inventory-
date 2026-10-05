@@ -190,9 +190,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       {/* Top Welcome & Quick Action Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs">
         <div>
-          <span className="text-xs text-slate-500 font-medium">Daily Financial Dashboard</span>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-md bg-purple-50 text-[#4C0196] border border-purple-200">
+              BizFlow Dashboard
+            </span>
+            <span className="text-xs text-slate-400">·</span>
+            <span className="text-xs text-slate-500 font-medium">{business.name || 'Smartcore ICT Centre'}</span>
+          </div>
           <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
-            {business.name} Position
+            {business.name || 'Smartcore ICT Centre'} Position
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
             Real-time cash flow, receivables, payables, and estimated net profit.

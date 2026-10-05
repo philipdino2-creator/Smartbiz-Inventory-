@@ -93,6 +93,12 @@ class ApiService {
     });
   }
 
+  async resetLedger(): Promise<{ success: boolean; message: string }> {
+    return this.request('/api/business/reset-ledger', {
+      method: 'POST',
+    });
+  }
+
   // USERS & RBAC
   async getUsers(): Promise<User[]> {
     return this.request<User[]>('/api/users');

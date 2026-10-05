@@ -119,6 +119,7 @@ interface BusinessContextType {
 
   metrics: ReturnType<typeof calculateFinancialMetrics>;
   resetToDemoData: () => void;
+  resetLedgerToZero: () => Promise<{ success: boolean; message?: string }>;
   exportAllDataJSON: () => string;
 
   // Migration & Server State
@@ -1504,6 +1505,47 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
+  // Reset all ledger transactions to zero for live usage (guarded for owner)
+  const resetLedgerToZero = async (): Promise<{ success: boolean; message?: string }> => {
+    if (!hasPermission('manage_business')) {
+      alert('Permission Denied: Resetting ledger entries is restricted to the Business Owner.');
+      return { success: false, message: 'Permission Denied' };
+    }
+    try {
+      await api.resetLedger();
+    } catch (err: any) {
+      console.warn('Server reset notice:', err.message);
+    }
+    setSales([]);
+    setExpenses([]);
+    setPayables([]);
+    setDebtPayments([]);
+    setAuditLogs([]);
+    setReconciliations([]);
+    setCustomers(prev => prev.map(c => ({
+      ...c,
+      totalPurchases: 0,
+      totalPaid: 0,
+      outstandingDebt: 0,
+    })));
+    setProducts(prev => prev.map(p => ({
+      ...p,
+      currentStock: p.openingStock || p.currentStock,
+    })));
+    setBusiness(prev => ({
+      ...prev,
+      lastInvoiceSequence: 100,
+    }));
+    localStorage.setItem(STORAGE_KEYS.SALES, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.EXPENSES, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.PAYABLES, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.DEBT_PAYMENTS, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.RECONCILIATIONS, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify([]));
+    await fetchAllServerData();
+    return { success: true, message: 'Dashboard and ledger entries reset to zero successfully.' };
+  };
+
   // Export full backup with strict permission check
   const exportAllDataJSON = () => {
     if (!hasPermission('manage_business') && !hasPermission('export_financial_data')) {
@@ -1615,6 +1657,7 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
         metrics,
         resetToDemoData,
+        resetLedgerToZero,
         exportAllDataJSON,
 
         isBackendConnected,

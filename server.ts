@@ -1,15 +1,16 @@
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import { createServer as createViteServer } from 'vite';
+import http, { Server } from 'http';
 import path from 'path';
 import fs from 'fs';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
-import { db } from './src/db/index.ts';
+import { db, checkDatabaseHealth, closePool } from './src/db/index.ts';
 import * as schema from './src/db/schema.ts';
 import { eq, desc, sql, and, inArray } from 'drizzle-orm';
 import { seedDatabaseIfEmpty } from './src/db/seed.ts';
-import { requireAuth, requirePermission, activeSessions, AuthRequest } from './src/middleware/auth.ts';
+import { requireAuth, requirePermission, createSession, revokeSession, AuthRequest } from './src/middleware/auth.ts';
 import { adminAuth } from './src/lib/firebase-admin.ts';
 import { validateOwnerProtection, hasPermission } from './src/utils/permissionUtils.ts';
 import { calculateSaleTotals, roundToKobo, calculateExpectedCash, calculateReconciliationVariance } from './src/utils/calculations.ts';
@@ -21,7 +22,65 @@ const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const isProduction = process.env.NODE_ENV === 'production';
 
+// ==========================================
+// RUNTIME STATE & GRACEFUL SHUTDOWN GUARDS
+// ==========================================
+let isShuttingDown = false;
+let activeRequestsCount = 0;
+let httpServer: Server | null = null;
+let shutdownPromise: Promise<void> | null = null;
+
+export function getShutdownStatus() {
+  return { isShuttingDown, activeRequestsCount };
+}
+
+// Request tracking & shutdown rejection middleware
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (isShuttingDown && req.path !== '/api/health') {
+    res.set('Connection', 'close');
+    res.status(503).json({ error: 'Server is shutting down' });
+    return;
+  }
+  activeRequestsCount++;
+  res.on('finish', () => {
+    activeRequestsCount = Math.max(0, activeRequestsCount - 1);
+  });
+  next();
+});
+
 app.use(express.json({ limit: '10mb' }));
+
+// ==========================================
+// OPERATIONAL HEALTH & READINESS PROBE
+// ==========================================
+// Unauthenticated, lightweight endpoint for container orchestrators & uptime monitors
+app.get('/api/health', async (_req: Request, res: Response) => {
+  if (isShuttingDown) {
+    res.status(503).json({
+      status: 'unhealthy',
+      database: 'shutting_down',
+      message: 'Server is shutting down',
+      timestamp: new Date().toISOString(),
+    });
+    return;
+  }
+
+  const dbHealth = await checkDatabaseHealth();
+  if (!dbHealth.ok) {
+    res.status(503).json({
+      status: 'unhealthy',
+      database: 'unavailable',
+      timestamp: new Date().toISOString(),
+    });
+    return;
+  }
+
+  res.status(200).json({
+    status: 'ok',
+    database: 'ok',
+    timestamp: new Date().toISOString(),
+  });
+});
 
 // Helper: Add audit log on server
 async function logServerAudit(
@@ -88,16 +147,8 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       }
     }
 
-    // Generate secure session token
-    const token = `smt_tok_${crypto.randomBytes(32).toString('hex')}`;
-    const expiresAt = Date.now() + 1000 * 60 * 60 * 24 * 7; // 7 days
-
-    activeSessions.set(token, {
-      userId: u.id,
-      businessId: u.businessId,
-      createdAt: Date.now(),
-      expiresAt,
-    });
+    // Generate persistent PostgreSQL session
+    const { token } = await createSession(u.id, u.businessId, 7);
 
     const businessList = await db.select().from(schema.businesses).where(eq(schema.businesses.id, u.businessId)).limit(1);
 
@@ -172,13 +223,8 @@ app.post('/api/auth/firebase-login', async (req: Request, res: Response) => {
       u = created[0];
     }
 
-    const token = `smt_tok_${crypto.randomBytes(32).toString('hex')}`;
-    activeSessions.set(token, {
-      userId: u.id,
-      businessId: u.businessId,
-      createdAt: Date.now(),
-      expiresAt: Date.now() + 1000 * 60 * 60 * 24 * 7,
-    });
+    // Generate persistent PostgreSQL session
+    const { token } = await createSession(u.id, u.businessId, 7);
 
     const businessList = await db.select().from(schema.businesses).where(eq(schema.businesses.id, u.businessId)).limit(1);
 
@@ -218,9 +264,13 @@ app.get('/api/auth/me', requireAuth, async (req: AuthRequest, res: Response) => 
 });
 
 // Logout
-app.post('/api/auth/logout', requireAuth, (req: AuthRequest, res: Response) => {
+app.post('/api/auth/logout', requireAuth, async (req: AuthRequest, res: Response) => {
   if (req.token) {
-    activeSessions.delete(req.token);
+    try {
+      await revokeSession(req.token);
+    } catch (err: any) {
+      console.error('Failed to revoke session:', err.message);
+    }
   }
   res.json({ success: true, message: 'Logged out successfully' });
 });
@@ -266,6 +316,56 @@ app.put('/api/business', requireAuth, requirePermission('manage_business'), asyn
     res.json(updated[0]);
   } catch (err) {
     res.status(500).json({ error: 'Failed to update business settings' });
+  }
+});
+
+// Clear and reset all transactional ledger records to zero (Owner only)
+app.post('/api/business/reset-ledger', requireAuth, requirePermission('manage_business'), async (req: AuthRequest, res: Response) => {
+  try {
+    await db.transaction(async (tx) => {
+      // 1. Delete all transactional entries for this business
+      const bizSales = await tx.select({ id: schema.sales.id }).from(schema.sales).where(eq(schema.sales.businessId, req.businessId!));
+      if (bizSales.length > 0) {
+        const saleIds = bizSales.map(s => s.id);
+        await tx.delete(schema.saleItems).where(inArray(schema.saleItems.saleId, saleIds));
+        await tx.delete(schema.sales).where(eq(schema.sales.businessId, req.businessId!));
+      }
+      await tx.delete(schema.debtPayments).where(eq(schema.debtPayments.businessId, req.businessId!));
+      await tx.delete(schema.expenses).where(eq(schema.expenses.businessId, req.businessId!));
+      await tx.delete(schema.payables).where(eq(schema.payables.businessId, req.businessId!));
+      await tx.delete(schema.dailyReconciliations).where(eq(schema.dailyReconciliations.businessId, req.businessId!));
+      await tx.delete(schema.auditLogs).where(eq(schema.auditLogs.businessId, req.businessId!));
+
+      // 2. Zero customer balances
+      await tx.update(schema.customers)
+        .set({
+          totalPurchases: '0.00',
+          totalPaid: '0.00',
+          outstandingDebt: '0.00',
+        })
+        .where(eq(schema.customers.businessId, req.businessId!));
+
+      // 3. Reset product stock to opening stock
+      await tx.update(schema.products)
+        .set({
+          currentStock: sql`opening_stock`,
+        })
+        .where(eq(schema.products.businessId, req.businessId!));
+
+      // 4. Reset invoice sequence counter to 100
+      await tx.update(schema.businesses)
+        .set({
+          lastInvoiceSequence: 100,
+        })
+        .where(eq(schema.businesses.id, req.businessId!));
+    });
+
+    await logServerAudit(req.businessId!, req.user!.id, req.user!.name, req.user!.role, 'reset', 'system', req.businessId!, 'System ledger reset to zero for live operational usage');
+
+    res.json({ success: true, message: 'Ledger and dashboard entries reset to zero successfully' });
+  } catch (err: any) {
+    console.error('Reset ledger error:', err);
+    res.status(500).json({ error: 'Failed to reset ledger entries' });
   }
 });
 
@@ -1407,9 +1507,12 @@ app.post('/api/reconciliation/open', requireAuth, requirePermission('manage_reco
   const safeFloat = Math.max(0, roundToKobo(Number(openingFloat) || 0));
 
   try {
-    const existing = await db.select().from(schema.dailyReconciliations).where(and(eq(schema.dailyReconciliations.businessId, req.businessId!), eq(schema.dailyReconciliations.date, todayDate))).limit(1);
+    const existing = await db.select().from(schema.dailyReconciliations)
+      .where(and(eq(schema.dailyReconciliations.businessId, req.businessId!), eq(schema.dailyReconciliations.date, todayDate)))
+      .limit(1);
+
     if (existing.length > 0) {
-      res.status(400).json({ error: `Register for ${todayDate} is already ${existing[0].status}.` });
+      res.status(409).json({ error: 'An open or closed reconciliation already exists for this business date.' });
       return;
     }
 
@@ -1445,108 +1548,129 @@ app.post('/api/reconciliation/open', requireAuth, requirePermission('manage_reco
 
     res.json({ success: true, id });
   } catch (err: any) {
+    if (err.code === '23505' || err.message?.includes('unique') || err.message?.includes('duplicate key')) {
+      res.status(409).json({ error: 'An open or closed reconciliation already exists for this business date.' });
+      return;
+    }
     res.status(500).json({ error: err.message || 'Failed to open register' });
   }
 });
 
-// Close Register
+// Close Register with Row-Level Lock (FOR UPDATE) & Atomic Transaction
 app.post('/api/reconciliation/:id/close', requireAuth, requirePermission('manage_reconciliation'), async (req: AuthRequest, res: Response) => {
   const id = req.params.id;
   const { actualCashCounted, actualPosSettlement, actualTransferSettlement, cashDrop, varianceReason, reconciliationNotes } = req.body;
 
   try {
-    const recList = await db.select().from(schema.dailyReconciliations).where(and(eq(schema.dailyReconciliations.id, id), eq(schema.dailyReconciliations.businessId, req.businessId!))).limit(1);
-    if (recList.length === 0) {
-      res.status(404).json({ error: 'Reconciliation record not found' });
-      return;
-    }
-    const rec = recList[0];
-    if (rec.status !== 'open') {
-      res.status(400).json({ error: `Register is already marked as ${rec.status}.` });
-      return;
-    }
+    const result = await db.transaction(async (tx) => {
+      // 1. Lock reconciliation row FOR UPDATE to strictly serialize concurrent close operations
+      const recList = await tx.select().from(schema.dailyReconciliations)
+        .where(and(eq(schema.dailyReconciliations.id, id), eq(schema.dailyReconciliations.businessId, req.businessId!)))
+        .for('update');
 
-    // Pull authoritative system transactions for this exact day
-    const daySales = await db.select().from(schema.sales).where(and(eq(schema.sales.businessId, req.businessId!), eq(schema.sales.date, rec.date)));
-    const systemCashSales = roundToKobo(
-      daySales.filter(s => s.paymentMethod === 'Cash').reduce((sum, s) => sum + (Number(s.amountPaid) || 0), 0)
-    );
-    const systemPosSales = roundToKobo(
-      daySales.filter(s => s.paymentMethod === 'POS' || s.paymentMethod === 'Card').reduce((sum, s) => sum + (Number(s.amountPaid) || 0), 0)
-    );
-    const systemTransferSales = roundToKobo(
-      daySales.filter(s => s.paymentMethod === 'Bank Transfer').reduce((sum, s) => sum + (Number(s.amountPaid) || 0), 0)
-    );
+      if (recList.length === 0) {
+        return { status: 404, error: 'Reconciliation record not found' };
+      }
+      const rec = recList[0];
+      if (rec.status !== 'open') {
+        return { status: 409, error: `Register is already marked as ${rec.status}.` };
+      }
 
-    const dayDebtPayments = await db.select().from(schema.debtPayments).where(and(eq(schema.debtPayments.businessId, req.businessId!), eq(schema.debtPayments.date, rec.date)));
-    const systemDebtCashCollected = roundToKobo(
-      dayDebtPayments.filter(p => p.targetType === 'customer' && p.paymentMethod === 'Cash').reduce((sum, p) => sum + (Number(p.amount) || 0), 0)
-    );
+      // 2. Pull authoritative transactions for this exact day inside transaction
+      const daySales = await tx.select().from(schema.sales)
+        .where(and(eq(schema.sales.businessId, req.businessId!), eq(schema.sales.date, rec.date)));
+      const systemCashSales = roundToKobo(
+        daySales.filter(s => s.paymentMethod === 'Cash').reduce((sum, s) => sum + (Number(s.amountPaid) || 0), 0)
+      );
+      const systemPosSales = roundToKobo(
+        daySales.filter(s => s.paymentMethod === 'POS' || s.paymentMethod === 'Card').reduce((sum, s) => sum + (Number(s.amountPaid) || 0), 0)
+      );
+      const systemTransferSales = roundToKobo(
+        daySales.filter(s => s.paymentMethod === 'Bank Transfer').reduce((sum, s) => sum + (Number(s.amountPaid) || 0), 0)
+      );
 
-    const dayExpenses = await db.select().from(schema.expenses).where(and(eq(schema.expenses.businessId, req.businessId!), eq(schema.expenses.date, rec.date)));
-    const systemCashExpenses = roundToKobo(
-      dayExpenses.filter(e => e.paymentMethod === 'Cash').reduce((sum, e) => sum + (Number(e.amount) || 0), 0)
-    );
+      const dayDebtPayments = await tx.select().from(schema.debtPayments)
+        .where(and(eq(schema.debtPayments.businessId, req.businessId!), eq(schema.debtPayments.date, rec.date)));
+      const systemDebtCashCollected = roundToKobo(
+        dayDebtPayments.filter(p => p.targetType === 'customer' && p.paymentMethod === 'Cash').reduce((sum, p) => sum + (Number(p.amount) || 0), 0)
+      );
 
-    const safeDrop = Math.max(0, roundToKobo(Number(cashDrop) || 0));
-    const safeCounted = Math.max(0, roundToKobo(Number(actualCashCounted) || 0));
-    const openingFloat = Number(rec.openingFloat) || 0;
+      const dayExpenses = await tx.select().from(schema.expenses)
+        .where(and(eq(schema.expenses.businessId, req.businessId!), eq(schema.expenses.date, rec.date)));
+      const systemCashExpenses = roundToKobo(
+        dayExpenses.filter(e => e.paymentMethod === 'Cash').reduce((sum, e) => sum + (Number(e.amount) || 0), 0)
+      );
 
-    const expectedCashInHand = calculateExpectedCash(
-      openingFloat,
-      systemCashSales,
-      systemDebtCashCollected,
-      systemCashExpenses,
-      safeDrop
-    );
+      const safeDrop = Math.max(0, roundToKobo(Number(cashDrop) || 0));
+      const safeCounted = Math.max(0, roundToKobo(Number(actualCashCounted) || 0));
+      const openingFloat = Number(rec.openingFloat) || 0;
 
-    const varianceResult = calculateReconciliationVariance(safeCounted, expectedCashInHand);
+      const expectedCashInHand = calculateExpectedCash(
+        openingFloat,
+        systemCashSales,
+        systemDebtCashCollected,
+        systemCashExpenses,
+        safeDrop
+      );
 
-    // Enforcement: If variance is detected, a reason is mandatory
-    if (!varianceResult.isBalanced && (!varianceReason || !varianceReason.trim())) {
-      res.status(400).json({
-        error: `Variance of ₦${Math.abs(varianceResult.variance).toLocaleString()} detected. A variance explanation reason is mandatory before closing the business day.`,
+      const varianceResult = calculateReconciliationVariance(safeCounted, expectedCashInHand);
+
+      // Enforcement: If variance is detected, a reason is mandatory
+      if (!varianceResult.isBalanced && (!varianceReason || !varianceReason.trim())) {
+        return {
+          status: 400,
+          error: `Variance of ₦${Math.abs(varianceResult.variance).toLocaleString()} detected. A variance explanation reason is mandatory before closing the business day.`,
+        };
+      }
+
+      const now = new Date().toISOString();
+      await tx.update(schema.dailyReconciliations)
+        .set({
+          systemCashSales: String(systemCashSales),
+          systemPosSales: String(systemPosSales),
+          systemTransferSales: String(systemTransferSales),
+          systemDebtCashCollected: String(systemDebtCashCollected),
+          systemCashExpenses: String(systemCashExpenses),
+          cashDrop: String(safeDrop),
+          expectedCashInHand: String(expectedCashInHand),
+          actualCashCounted: String(safeCounted),
+          actualPosSettlement: String(roundToKobo(Number(actualPosSettlement) || 0)),
+          actualTransferSettlement: String(roundToKobo(Number(actualTransferSettlement) || 0)),
+          cashVariance: String(varianceResult.variance),
+          varianceReason: varianceReason?.trim() || null,
+          reconciliationNotes: reconciliationNotes?.trim() || null,
+          status: 'closed',
+          closedAt: now,
+          closedByUserId: req.user!.id,
+          closedByUserName: req.user!.name,
+          updatedAt: now,
+        })
+        .where(eq(schema.dailyReconciliations.id, id));
+
+      const varLabel = varianceResult.variance === 0 ? 'Balanced' : `Variance ₦${varianceResult.variance.toLocaleString()}`;
+      await tx.insert(schema.auditLogs).values({
+        id: `audit_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        businessId: req.businessId!,
+        userId: req.user!.id,
+        userName: req.user!.name,
+        userRole: req.user!.role,
+        action: 'close_day',
+        entity: 'reconciliation',
+        entityId: id,
+        details: `Closed business register for ${rec.date}: Counted ₦${safeCounted.toLocaleString()}, Expected ₦${expectedCashInHand.toLocaleString()} (${varLabel})`,
+        metadata: null,
+        timestamp: now,
       });
+
+      return { success: true, variance: varianceResult.variance };
+    });
+
+    if (result.error) {
+      res.status(result.status || 400).json({ error: result.error });
       return;
     }
 
-    const now = new Date().toISOString();
-    await db.update(schema.dailyReconciliations)
-      .set({
-        systemCashSales: String(systemCashSales),
-        systemPosSales: String(systemPosSales),
-        systemTransferSales: String(systemTransferSales),
-        systemDebtCashCollected: String(systemDebtCashCollected),
-        systemCashExpenses: String(systemCashExpenses),
-        cashDrop: String(safeDrop),
-        expectedCashInHand: String(expectedCashInHand),
-        actualCashCounted: String(safeCounted),
-        actualPosSettlement: String(roundToKobo(Number(actualPosSettlement) || 0)),
-        actualTransferSettlement: String(roundToKobo(Number(actualTransferSettlement) || 0)),
-        cashVariance: String(varianceResult.variance),
-        varianceReason: varianceReason?.trim() || null,
-        reconciliationNotes: reconciliationNotes?.trim() || null,
-        status: 'closed',
-        closedAt: now,
-        closedByUserId: req.user!.id,
-        closedByUserName: req.user!.name,
-        updatedAt: now,
-      })
-      .where(eq(schema.dailyReconciliations.id, id));
-
-    const varLabel = varianceResult.variance === 0 ? 'Balanced' : `Variance ₦${varianceResult.variance.toLocaleString()}`;
-    await logServerAudit(
-      req.businessId!,
-      req.user!.id,
-      req.user!.name,
-      req.user!.role,
-      'close_day',
-      'reconciliation',
-      id,
-      `Closed business register for ${rec.date}: Counted ₦${safeCounted.toLocaleString()}, Expected ₦${expectedCashInHand.toLocaleString()} (${varLabel})`
-    );
-
-    res.json({ success: true, variance: varianceResult.variance });
+    res.json(result);
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to close register' });
   }
@@ -1779,10 +1903,78 @@ app.post('/api/migrate/import-localstorage', requireAuth, requirePermission('man
 });
 
 // ==========================================
-// 13. VITE / STATIC SERVING & STARTUP
+// 13. VITE / STATIC SERVING, STARTUP & GRACEFUL SHUTDOWN
 // ==========================================
 
-async function startServer() {
+export async function gracefulShutdown(signal: string, exitProcess: boolean = true): Promise<void> {
+  if (shutdownPromise) {
+    console.log(`[SHUTDOWN] Shutdown already in progress. Ignoring duplicate ${signal} signal.`);
+    return shutdownPromise;
+  }
+
+  shutdownPromise = (async () => {
+    console.log(`\n[SHUTDOWN] ${signal} signal received. Initiating graceful shutdown...`);
+    isShuttingDown = true;
+
+    // Safety timeout: force exit if active requests take too long (max 10s)
+    let forceTimer: any = null;
+    if (exitProcess) {
+      forceTimer = setTimeout(() => {
+        console.error('[SHUTDOWN] Graceful shutdown timeout reached (10s). Forcing termination.');
+        process.exit(1);
+      }, 10000);
+      forceTimer.unref?.();
+    }
+
+    // 1. Stop HTTP server from accepting new connections
+    if (httpServer) {
+      await new Promise<void>((resolve) => {
+        httpServer!.close((err) => {
+          if (err) {
+            console.error('[SHUTDOWN] Error closing HTTP server:', err.message);
+          } else {
+            console.log('[SHUTDOWN] HTTP server stopped accepting new connections.');
+          }
+          resolve();
+        });
+      });
+    }
+
+    // 2. Wait for in-flight requests to complete (max 5s)
+    const drainDeadline = Date.now() + 5000;
+    while (activeRequestsCount > 0 && Date.now() < drainDeadline) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    console.log(`[SHUTDOWN] Active requests drained (remaining: ${activeRequestsCount}).`);
+
+    // 3. Drain and close PostgreSQL connection pool
+    try {
+      await closePool();
+      console.log('[SHUTDOWN] PostgreSQL connection pool drained and closed.');
+    } catch (err: any) {
+      console.error('[SHUTDOWN] Error closing PostgreSQL pool:', err.message);
+    }
+
+    if (forceTimer) clearTimeout(forceTimer);
+    console.log('[SHUTDOWN] Graceful shutdown completed cleanly.');
+
+    if (exitProcess) {
+      process.exit(0);
+    }
+  })();
+
+  return shutdownPromise;
+}
+
+export async function startServer() {
+  console.log('[STARTUP] Verifying database connectivity and readiness...');
+  const initialHealth = await checkDatabaseHealth();
+  if (!initialHealth.ok) {
+    console.error('[STARTUP ERROR] Database readiness check failed (unable to reach PostgreSQL). Server startup aborted.');
+    process.exit(1);
+  }
+  console.log('[STARTUP] Database connectivity verified (PostgreSQL ready).');
+
   // Seed database if empty
   try {
     await seedDatabaseIfEmpty();
@@ -1806,9 +1998,20 @@ async function startServer() {
     }
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Smartcore Ledger server running on port ${PORT} (Node.js + PostgreSQL)`);
   });
+
+  // Attach OS termination signal handlers
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+  return httpServer;
 }
 
-startServer();
+export { app };
+
+// Auto-start server unless running in test mode
+if (process.env.NODE_ENV !== 'test') {
+  startServer();
+}

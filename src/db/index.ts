@@ -24,6 +24,31 @@ export const createPool = () => {
   return global._postgresPool;
 };
 
-const pool = createPool();
+export const pool = createPool();
 
 export const db = drizzle(pool, { schema });
+
+/**
+ * Checks PostgreSQL connectivity by executing a lightweight query.
+ * Sanitizes errors to prevent exposing internal connection details or credentials.
+ */
+export const checkDatabaseHealth = async (customPool?: Pool): Promise<{ ok: boolean; error?: string }> => {
+  try {
+    const p = customPool || pool;
+    await p.query('SELECT 1');
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: 'Database query failed or timed out' };
+  }
+};
+
+/**
+ * Gracefully drains and closes the PostgreSQL connection pool.
+ */
+export const closePool = async (customPool?: Pool): Promise<void> => {
+  const p = customPool || global._postgresPool;
+  if (p) {
+    global._postgresPool = undefined;
+    await p.end();
+  }
+};
