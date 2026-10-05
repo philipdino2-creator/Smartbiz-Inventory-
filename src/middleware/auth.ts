@@ -1,10 +1,10 @@
-import { Request, Response, NextFunction } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { adminAuth } from '../lib/firebase-admin.ts';
 import { db } from '../db/index.ts';
 import { users, sessions } from '../db/schema.ts';
 import { eq, or, lt, and, isNotNull } from 'drizzle-orm';
-import { User, Permission } from '../types/index.ts';
+import type { User, Permission } from '../types/index.ts';
 import { hasPermission } from '../utils/permissionUtils.ts';
 
 // Legacy in-memory session interface for backward compatibility only (non-authoritative)

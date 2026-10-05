@@ -32,6 +32,9 @@ import {
   Sun,
   Palette,
   Eye,
+  Upload,
+  Image as ImageIcon,
+  Link as LinkIcon,
 } from 'lucide-react';
 import { BizFlowLogo } from '../common/BizFlowLogo';
 import { ThemeToggle } from '../common/ThemeToggle';
@@ -75,6 +78,104 @@ export const SettingsView: React.FC = () => {
   const [currencySymbol, setCurrencySymbol] = useState(business.currencySymbol);
   const [enableTax, setEnableTax] = useState(business.enableTax);
   const [taxRate, setTaxRate] = useState(business.taxRate);
+  const [logoUrl, setLogoUrl] = useState(business.logoUrl || '');
+  const [logoUploadError, setLogoUploadError] = useState<string | null>(null);
+  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  const [showUrlInput, setShowUrlInput] = useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  // Sync state if business updates from server
+  React.useEffect(() => {
+    if (business.logoUrl !== undefined) {
+      setLogoUrl(business.logoUrl || '');
+    }
+  }, [business.logoUrl]);
+
+  const handleLogoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate type
+    const validTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/svg+xml'];
+    if (!validTypes.includes(file.type)) {
+      setLogoUploadError('Please select a valid image file (PNG, JPG, WebP, or SVG).');
+      return;
+    }
+
+    // Validate file size (max 3MB)
+    if (file.size > 3 * 1024 * 1024) {
+      setLogoUploadError('Logo file size must be less than 3MB.');
+      return;
+    }
+
+    setLogoUploadError(null);
+    setIsUploadingLogo(true);
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      if (!dataUrl) {
+        setIsUploadingLogo(false);
+        return;
+      }
+
+      // If SVG, keep raw SVG data URL
+      if (file.type === 'image/svg+xml') {
+        setLogoUrl(dataUrl);
+        setIsUploadingLogo(false);
+        return;
+      }
+
+      // Optimize raster images using Canvas (max dimension 600px)
+      const img = new Image();
+      img.onload = () => {
+        const maxDimension = 600;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const compressedDataUrl = canvas.toDataURL(file.type === 'image/png' ? 'image/png' : 'image/jpeg', 0.9);
+          setLogoUrl(compressedDataUrl);
+        } else {
+          setLogoUrl(dataUrl);
+        }
+        setIsUploadingLogo(false);
+      };
+      img.onerror = () => {
+        setLogoUrl(dataUrl);
+        setIsUploadingLogo(false);
+      };
+      img.src = dataUrl;
+    };
+    reader.onerror = () => {
+      setLogoUploadError('Failed to read image file.');
+      setIsUploadingLogo(false);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveLogo = () => {
+    setLogoUrl('');
+    setLogoUploadError(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
 
   // Bank & Payment Details for debt reminders
   const [bankName, setBankName] = useState(business.bankName || 'Zenith Bank');
@@ -121,6 +222,7 @@ export const SettingsView: React.FC = () => {
       currencySymbol: currencySymbol.trim(),
       enableTax,
       taxRate: Number(taxRate) || 0,
+      logoUrl: logoUrl.trim(),
       bankName: bankName.trim(),
       accountName: accountName.trim(),
       accountNumber: accountNumber.trim(),
@@ -270,23 +372,25 @@ export const SettingsView: React.FC = () => {
   return (
     <div className="space-y-6 pb-16">
       {/* Header & Section Title */}
-      <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-xl font-bold text-slate-900 tracking-tight">Business Settings &amp; Administration</h1>
-            <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-purple-100 text-[#4C0196]">
+            <h1 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">Business Settings &amp; Administration</h1>
+            <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-purple-100 dark:bg-purple-900/60 text-[#4C0196] dark:text-purple-300">
               {currentUser.role} session
             </span>
           </div>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Configure company profile, bank payment details for WhatsApp reminders, team access control, and backups
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+            Configure company profile, bank payment details for WhatsApp reminders, theme appearance, and team access
           </p>
         </div>
 
-        <div className="flex items-center gap-2 flex-wrap self-start md:self-auto">
-          {/* Quick Dark Mode Toggle */}
-          <div className="flex items-center gap-1.5">
-            <ThemeToggle variant="segmented" />
+        <div className="flex items-center gap-2 flex-wrap self-start lg:self-auto">
+          {/* Quick Dark Mode Toggle (Switch & Segmented) */}
+          <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-800/80 p-1.5 rounded-xl border border-slate-200 dark:border-slate-700">
+            <ThemeToggle variant="switch" showLabels />
+            <div className="h-5 w-px bg-slate-200 dark:bg-slate-700 hidden sm:block" />
+            <ThemeToggle variant="segmented" className="hidden sm:inline-flex" />
           </div>
 
           {/* Live Active Session Switcher for testing/demo */}
@@ -381,21 +485,155 @@ export const SettingsView: React.FC = () => {
         <form onSubmit={handleSaveBusiness} className="space-y-6">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* General Organization Info */}
-            <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 space-y-4 shadow-2xs">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 sm:p-6 space-y-4 shadow-2xs">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
                 <div>
-                  <h2 className="text-sm font-bold text-slate-900">Organization Profile</h2>
-                  <p className="text-xs text-slate-500">Official business information used on thermal receipts &amp; invoices</p>
+                  <h2 className="text-sm font-bold text-slate-900 dark:text-white">Organization Profile</h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Official business information used on thermal receipts &amp; invoices</p>
                 </div>
                 {savedSuccess && (
-                  <span className="flex items-center gap-1 text-xs font-semibold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200">
+                  <span className="flex items-center gap-1 text-xs font-semibold text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 px-2.5 py-1 rounded-md border border-emerald-200 dark:border-emerald-800">
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     <span>Saved</span>
                   </span>
                 )}
               </div>
 
-              <div className="space-y-3 text-xs">
+              <div className="space-y-4 text-xs">
+                {/* Official Business Logo Upload Field */}
+                <div className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="block font-bold text-slate-900 dark:text-white">
+                        Official Business Logo
+                      </label>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                        Upload your organization&apos;s brand logo for thermal receipts, invoices, and system navigation.
+                      </p>
+                    </div>
+                    {logoUrl && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                        Logo Active
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row items-center gap-4">
+                    {/* Visual Preview Box */}
+                    <div className="relative shrink-0 w-24 h-24 rounded-2xl border-2 border-dashed border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 flex items-center justify-center p-2 overflow-hidden shadow-2xs group">
+                      {logoUrl ? (
+                        <>
+                          <img
+                            src={logoUrl}
+                            alt="Uploaded Business Logo"
+                            className="w-full h-full object-contain"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleRemoveLogo}
+                            className="absolute inset-0 bg-slate-950/75 text-rose-300 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center transition-opacity text-[10px] font-bold cursor-pointer"
+                            title="Remove this logo"
+                          >
+                            <Trash2 className="w-4 h-4 mb-0.5 text-rose-400" />
+                            <span>Remove</span>
+                          </button>
+                        </>
+                      ) : (
+                        <div className="flex flex-col items-center justify-center text-slate-400 dark:text-slate-500 text-center p-1">
+                          <ImageIcon className="w-8 h-8 mb-1 text-slate-300 dark:text-slate-600" />
+                          <span className="text-[9px] font-medium leading-tight">No Logo</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Upload Controls & Actions */}
+                    <div className="flex-1 space-y-2 w-full">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          id="business-logo-file-input"
+                          accept="image/png, image/jpeg, image/webp, image/svg+xml"
+                          onChange={handleLogoFileChange}
+                          className="hidden"
+                        />
+                        <label
+                          htmlFor="business-logo-file-input"
+                          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-white bg-[#4C0196] hover:bg-[#3b0075] transition-colors cursor-pointer shadow-xs active:scale-95"
+                        >
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>{logoUrl ? 'Change Logo Image' : 'Upload Business Logo'}</span>
+                        </label>
+
+                        {logoUrl && (
+                          <button
+                            type="button"
+                            onClick={handleRemoveLogo}
+                            className="inline-flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-semibold text-rose-700 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 border border-rose-200 dark:border-rose-900/50 transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Remove</span>
+                          </button>
+                        )}
+
+                        {isUploadingLogo && (
+                          <span className="text-xs text-purple-600 dark:text-purple-400 animate-pulse font-medium">
+                            Processing image...
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400 flex items-center gap-1">
+                        <Info className="w-3 h-3 text-[#4C0196] shrink-0" />
+                        <span>PNG, JPG, WebP, or SVG (max 3MB). Scaled cleanly for print receipts &amp; web.</span>
+                      </p>
+
+                      {/* Optional Remote Image URL toggle */}
+                      <div>
+                        <button
+                          type="button"
+                          onClick={() => setShowUrlInput(!showUrlInput)}
+                          className="text-[11px] font-semibold text-[#4C0196] dark:text-purple-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
+                        >
+                          <LinkIcon className="w-3 h-3" />
+                          <span>{showUrlInput ? 'Hide URL input' : 'Or paste online image URL'}</span>
+                        </button>
+
+                        {showUrlInput && (
+                          <div className="mt-1.5 flex gap-2">
+                            <input
+                              type="url"
+                              value={logoUrl}
+                              onChange={e => {
+                                setLogoUrl(e.target.value);
+                                setLogoUploadError(null);
+                              }}
+                              placeholder="https://example.com/logo.png"
+                              className="flex-1 px-3 py-1.5 text-xs border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-white rounded-lg focus:ring-1 focus:ring-[#4C0196]"
+                            />
+                            {logoUrl && (
+                              <button
+                                type="button"
+                                onClick={() => setLogoUrl('')}
+                                className="px-2.5 py-1 text-xs text-slate-500 hover:text-slate-800 dark:hover:text-white"
+                              >
+                                Clear
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {logoUploadError && (
+                        <div className="text-[11px] font-semibold text-rose-600 dark:text-rose-400 flex items-center gap-1 pt-0.5">
+                          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                          <span>{logoUploadError}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Business / Training Centre Name *</label>
                   <input
@@ -514,15 +752,15 @@ export const SettingsView: React.FC = () => {
             </div>
 
             {/* Business Payment & Bank Details (For WhatsApp Reminders & Invoices) */}
-            <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 space-y-4 shadow-2xs">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 sm:p-6 space-y-4 shadow-2xs">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
                 <div className="flex items-center gap-2">
-                  <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold">
-                    <CreditCard className="w-4 h-4 text-emerald-700" />
+                  <div className="w-7 h-7 rounded-lg bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 flex items-center justify-center font-bold">
+                    <CreditCard className="w-4 h-4 text-emerald-700 dark:text-emerald-400" />
                   </div>
                   <div>
-                    <h2 className="text-sm font-bold text-slate-900">Payment &amp; Bank Account Details</h2>
-                    <p className="text-xs text-slate-500">Populates customer debt reminders and invoices automatically</p>
+                    <h2 className="text-sm font-bold text-slate-900 dark:text-white">Payment &amp; Bank Account Details</h2>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">Populates customer debt reminders and invoices automatically</p>
                   </div>
                 </div>
               </div>
@@ -626,14 +864,19 @@ export const SettingsView: React.FC = () => {
 
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700">
                 <div className="space-y-0.5">
-                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200 block">
-                    Dark Mode (Night Shift Comfort)
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <Moon className="w-4 h-4 text-[#4C0196] dark:text-purple-400" />
+                    <span className="text-xs font-bold text-slate-800 dark:text-slate-200 block">
+                      Dark Mode (Night Shift Eye Comfort)
+                    </span>
+                  </div>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    Switch between crisp light mode and eye-comfort dark mode for evening business hours.
+                    Switch between crisp light mode and eye-comfort dark mode for evening business hours. Saved permanently across all sessions.
                   </p>
                 </div>
-                <div className="shrink-0">
+                <div className="shrink-0 flex items-center gap-3">
+                  <ThemeToggle variant="switch" showLabels />
+                  <div className="hidden sm:block h-6 w-px bg-slate-200 dark:bg-slate-700" />
                   <ThemeToggle variant="segmented" />
                 </div>
               </div>
@@ -667,6 +910,31 @@ export const SettingsView: React.FC = () => {
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                   Select your preferred color theme. Dark mode provides low glare and reduced eye fatigue for evening bookkeeping and dim counters.
                 </p>
+              </div>
+            </div>
+
+            {/* Primary Interactive Dark Mode Switch Card */}
+            <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-purple-50 via-indigo-50/40 to-slate-50 dark:from-slate-850 dark:via-purple-950/20 dark:to-slate-900 border border-purple-200/80 dark:border-purple-900/40 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-[#4C0196] text-white flex items-center justify-center shadow-xs">
+                    <Moon className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                      Dark Mode Night Toggle
+                    </h3>
+                    <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                      Instantly toggle between high-contrast daylight mode and deep slate night mode. Changes take effect across the entire app immediately and persist across browser reloads.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 shrink-0 self-start md:self-auto bg-white dark:bg-slate-800 p-2 rounded-xl border border-slate-200 dark:border-slate-700 shadow-2xs">
+                <ThemeToggle variant="switch" showLabels />
+                <div className="h-6 w-px bg-slate-200 dark:bg-slate-700 hidden sm:block" />
+                <ThemeToggle variant="button" />
               </div>
             </div>
 
@@ -706,16 +974,16 @@ export const SettingsView: React.FC = () => {
 
       {/* TAB 2: Team & Granular Permissions */}
       {activeTab === 'permissions' && (
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 space-y-6 shadow-2xs">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-200 gap-3">
+        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 sm:p-6 space-y-6 shadow-2xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-200 dark:border-slate-800 gap-3">
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-base font-bold text-slate-900">Authorized Team &amp; Granular Permissions</h2>
-                <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-700">
+                <h2 className="text-base font-bold text-slate-900 dark:text-white">Authorized Team &amp; Granular Permissions</h2>
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
                   {users.length} members
                 </span>
               </div>
-              <p className="text-xs text-slate-500 mt-0.5">
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                 Configure role defaults or customize fine-grained capability checks for Owners, Managers, and Staff
               </p>
             </div>
@@ -917,10 +1185,10 @@ export const SettingsView: React.FC = () => {
       {activeTab === 'categories' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Custom Expense Categories */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 space-y-4 shadow-2xs">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 sm:p-6 space-y-4 shadow-2xs">
             <div>
-              <h2 className="text-sm font-bold text-slate-900">Custom Operating Expense Categories</h2>
-              <p className="text-xs text-slate-500">Tag operating expenditures (Generator Diesel, Internet, Facility Maintenance)</p>
+              <h2 className="text-sm font-bold text-slate-900 dark:text-white">Custom Operating Expense Categories</h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">Tag operating expenditures (Generator Diesel, Internet, Facility Maintenance)</p>
             </div>
 
             <form onSubmit={handleAddCategory} className="flex gap-2">
@@ -929,7 +1197,7 @@ export const SettingsView: React.FC = () => {
                 placeholder="e.g. Workshop Supplies, Diesel Fuel..."
                 value={newCat}
                 onChange={e => setNewCat(e.target.value)}
-                className="flex-1 px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#4C0196]"
+                className="flex-1 px-3 py-2 text-xs border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-white rounded-lg focus:ring-2 focus:ring-[#4C0196]"
               />
               <button
                 type="submit"
@@ -943,7 +1211,7 @@ export const SettingsView: React.FC = () => {
               {expenseCategories.map(cat => (
                 <span
                   key={cat}
-                  className="text-xs bg-slate-100 text-slate-800 px-3 py-1 rounded-lg border border-slate-200 font-medium"
+                  className="text-xs bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 px-3 py-1 rounded-lg border border-slate-200 dark:border-slate-700 font-medium"
                 >
                   {cat}
                 </span>
@@ -952,13 +1220,13 @@ export const SettingsView: React.FC = () => {
           </div>
 
           {/* Data Backup & Factory Reset */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 space-y-4 shadow-2xs">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 sm:p-6 space-y-4 shadow-2xs">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-sm font-bold text-slate-900">Data Management &amp; Database Architecture</h2>
-                <p className="text-xs text-slate-500">Authoritative Cloud SQL PostgreSQL persistence and backup exports</p>
+                <h2 className="text-sm font-bold text-slate-900 dark:text-white">Data Management &amp; Database Architecture</h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Authoritative Cloud SQL PostgreSQL persistence and backup exports</p>
               </div>
-              <div className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full text-[11px] font-bold">
+              <div className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 rounded-full text-[11px] font-bold">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
                 <span>PostgreSQL Active</span>
               </div>

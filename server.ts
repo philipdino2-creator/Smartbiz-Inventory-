@@ -1,4 +1,5 @@
-import express, { Request, Response, NextFunction } from 'express';
+import express from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import { createServer as createViteServer } from 'vite';
 import http, { Server } from 'http';
 import path from 'path';
@@ -10,11 +11,12 @@ import { db, checkDatabaseHealth, closePool } from './src/db/index.ts';
 import * as schema from './src/db/schema.ts';
 import { eq, desc, sql, and, inArray } from 'drizzle-orm';
 import { seedDatabaseIfEmpty } from './src/db/seed.ts';
-import { requireAuth, requirePermission, createSession, revokeSession, AuthRequest } from './src/middleware/auth.ts';
+import { requireAuth, requirePermission, createSession, revokeSession } from './src/middleware/auth.ts';
+import type { AuthRequest } from './src/middleware/auth.ts';
 import { adminAuth } from './src/lib/firebase-admin.ts';
 import { validateOwnerProtection, hasPermission } from './src/utils/permissionUtils.ts';
 import { calculateSaleTotals, roundToKobo, calculateExpectedCash, calculateReconciliationVariance } from './src/utils/calculations.ts';
-import { Permission, User } from './src/types/index.ts';
+import type { Permission, User } from './src/types/index.ts';
 
 dotenv.config();
 
@@ -402,6 +404,8 @@ app.put('/api/business', requireAuth, requirePermission('manage_business'), asyn
         address: data.address,
         phone: data.phone,
         email: data.email,
+        website: data.website,
+        logoUrl: data.logoUrl !== undefined ? data.logoUrl : undefined,
         currency: data.currency,
         currencySymbol: data.currencySymbol,
         taxRate: Number(data.taxRate) || 7.5,

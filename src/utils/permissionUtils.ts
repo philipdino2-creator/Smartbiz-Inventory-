@@ -1,4 +1,4 @@
-import { User, UserRole, Permission } from '../types';
+import type { User, UserRole, Permission } from '../types/index.ts';
 
 export const ALL_PERMISSIONS: Permission[] = [
   // Sales

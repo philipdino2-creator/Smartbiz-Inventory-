@@ -51,6 +51,22 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, []);
 
+  // Listen to cross-tab/cross-window theme preference changes
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === THEME_STORAGE_KEY && e.newValue) {
+        if (e.newValue === 'light' || e.newValue === 'dark' || e.newValue === 'system') {
+          setThemeState(e.newValue);
+        }
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
+
   const isDark = theme === 'dark' || (theme === 'system' && systemIsDark);
 
   // Apply or remove .dark class on <html>

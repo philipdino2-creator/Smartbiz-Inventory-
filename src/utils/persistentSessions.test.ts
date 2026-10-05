@@ -9,10 +9,10 @@ import {
   generateSessionToken,
   cleanupExpiredSessions,
   requireAuth,
-  AuthRequest,
   activeSessions,
 } from '../middleware/auth.ts';
-import { Response } from 'express';
+import type { AuthRequest } from '../middleware/auth.ts';
+import type { Response } from 'express';
 
 export async function runPersistentSessionsTests(): Promise<{ passed: boolean; results: string[] }> {
   const results: string[] = [];

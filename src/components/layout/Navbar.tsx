@@ -47,15 +47,35 @@ export const Navbar: React.FC<NavbarProps> = ({
             className="text-left group flex items-center gap-2 cursor-pointer focus:outline-hidden"
             title="BizFlow Dashboard"
           >
-            <BizFlowLogo size="md" />
-            <div className="hidden sm:flex flex-col pl-2 border-l border-slate-200 dark:border-slate-800">
-              <span className="text-[11px] font-semibold text-slate-800 dark:text-slate-200 leading-tight">
-                {business.name || 'Smartcore ICT Centre'}
-              </span>
-              <span className="text-[9px] text-slate-400 dark:text-slate-500 font-medium">
-                Workspace
-              </span>
-            </div>
+            {business.logoUrl ? (
+              <div className="flex items-center gap-2.5">
+                <img
+                  src={business.logoUrl}
+                  alt={business.name || 'Business Logo'}
+                  className="h-8 max-w-[130px] object-contain rounded-md"
+                />
+                <div className="hidden sm:flex flex-col pl-2 border-l border-slate-200 dark:border-slate-800">
+                  <span className="text-[11px] font-semibold text-slate-800 dark:text-slate-200 leading-tight">
+                    {business.name || 'Smartcore ICT Centre'}
+                  </span>
+                  <span className="text-[9px] text-slate-400 dark:text-slate-500 font-medium">
+                    Workspace
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <>
+                <BizFlowLogo size="md" />
+                <div className="hidden sm:flex flex-col pl-2 border-l border-slate-200 dark:border-slate-800">
+                  <span className="text-[11px] font-semibold text-slate-800 dark:text-slate-200 leading-tight">
+                    {business.name || 'Smartcore ICT Centre'}
+                  </span>
+                  <span className="text-[9px] text-slate-400 dark:text-slate-500 font-medium">
+                    Workspace
+                  </span>
+                </div>
+              </>
+            )}
           </button>
         </div>
 

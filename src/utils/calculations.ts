@@ -1,4 +1,4 @@
-import { Sale, Expense, SaleItem, Customer, Payable } from '../types';
+import type { Sale, Expense, SaleItem, Customer, Payable } from '../types/index.ts';
 
 /**
  * Currency formatter with Nigerian Naira default

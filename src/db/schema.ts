@@ -9,6 +9,8 @@ export const businesses = pgTable('businesses', {
   address: text('address').notNull(),
   phone: text('phone').notNull(),
   email: text('email').notNull(),
+  website: text('website'),
+  logoUrl: text('logo_url'),
   currency: text('currency').notNull().default('NGN'),
   currencySymbol: text('currency_symbol').notNull().default('₦'),
   taxRate: doublePrecision('tax_rate').notNull().default(7.5),

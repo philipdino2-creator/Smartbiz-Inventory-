@@ -3,7 +3,7 @@ import { useTheme, ThemePreference } from '../../context/ThemeContext';
 import { Sun, Moon, Laptop, Check } from 'lucide-react';
 
 interface ThemeToggleProps {
-  variant?: 'button' | 'segmented' | 'cards';
+  variant?: 'button' | 'segmented' | 'cards' | 'switch';
   className?: string;
   showLabels?: boolean;
 }
@@ -40,6 +40,54 @@ export const ThemeToggle: React.FC<ThemeToggleProps> = ({
           </span>
         )}
       </button>
+    );
+  }
+
+  // 2. Direct Switch Toggle (Interactive Switch for Settings & Menus)
+  if (variant === 'switch') {
+    return (
+      <div className={`inline-flex items-center gap-3 ${className}`}>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={isDark}
+          onClick={toggleTheme}
+          className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden focus:ring-2 focus:ring-[#4C0196] focus:ring-offset-2 dark:focus:ring-offset-slate-900 ${
+            isDark ? 'bg-[#4C0196]' : 'bg-slate-300'
+          }`}
+          title={isDark ? 'Turn Dark Mode OFF (Switch to Light Mode)' : 'Turn Dark Mode ON (Switch to Night Mode)'}
+        >
+          <span className="sr-only">Toggle dark mode</span>
+          <span
+            className={`pointer-events-none relative inline-block h-6 w-6 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out flex items-center justify-center ${
+              isDark ? 'translate-x-5' : 'translate-x-0'
+            }`}
+          >
+            {isDark ? (
+              <Moon className="w-3.5 h-3.5 text-[#4C0196]" />
+            ) : (
+              <Sun className="w-3.5 h-3.5 text-amber-500" />
+            )}
+          </span>
+        </button>
+
+        {showLabels && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+              {isDark ? 'Dark Mode: ON' : 'Dark Mode: OFF'}
+            </span>
+            <span
+              className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                isDark
+                  ? 'bg-purple-100 dark:bg-purple-900/60 text-[#4C0196] dark:text-purple-300'
+                  : 'bg-slate-100 text-slate-600'
+              }`}
+            >
+              {isDark ? 'Night Comfort' : 'Day Mode'}
+            </span>
+          </div>
+        )}
+      </div>
     );
   }
 

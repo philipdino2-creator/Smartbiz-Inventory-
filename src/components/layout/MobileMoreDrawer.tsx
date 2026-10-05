@@ -86,7 +86,15 @@ export const MobileMoreDrawer: React.FC<MobileMoreDrawerProps> = ({
         {/* Drawer Header with BizFlow Identity */}
         <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
           <div className="space-y-1">
-            <BizFlowLogo size="sm" />
+            {business.logoUrl ? (
+              <img
+                src={business.logoUrl}
+                alt={business.name}
+                className="h-7 max-w-[120px] object-contain rounded"
+              />
+            ) : (
+              <BizFlowLogo size="sm" />
+            )}
             <p className="text-xs text-slate-500 dark:text-slate-400">
               Workspace: <span className="font-semibold text-slate-800 dark:text-slate-200">{business.name || 'Smartcore ICT Centre'}</span>
             </p>

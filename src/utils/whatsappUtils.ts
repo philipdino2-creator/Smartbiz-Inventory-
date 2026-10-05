@@ -1,4 +1,4 @@
-import { formatCurrency } from './calculations';
+import { formatCurrency } from './calculations.ts';
 
 export interface PhoneNormalizationResult {
   isValid: boolean;

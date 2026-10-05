@@ -1,5 +1,5 @@
-import { Business, User, Customer, ProductService, Sale, Expense, Payable, AuditLog, RecurringExpense, DailyReconciliation } from '../types';
-import { getTodayDateString } from '../utils/calculations';
+import type { Business, User, Customer, ProductService, Sale, Expense, Payable, AuditLog, RecurringExpense, DailyReconciliation } from '../types/index.ts';
+import { getTodayDateString } from '../utils/calculations.ts';
 
 const today = getTodayDateString();
 const getOffsetDate = (daysAgo: number) => {

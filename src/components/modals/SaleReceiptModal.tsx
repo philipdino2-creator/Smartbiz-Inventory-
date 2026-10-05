@@ -153,6 +153,13 @@ export const SaleReceiptModal: React.FC<SaleReceiptModalProps> = ({
               <div className="w-[230px] bg-white p-3.5 shadow-sm border border-slate-300 font-mono text-[10px] text-black leading-tight selection:bg-slate-200">
                 {/* Header */}
                 <div className="text-center space-y-0.5 pb-2">
+                  {business.logoUrl && (
+                    <img
+                      src={business.logoUrl}
+                      alt={business.name}
+                      className="h-7 max-w-[120px] object-contain mx-auto mb-1 filter grayscale"
+                    />
+                  )}
                   <div className="font-bold text-xs tracking-tight uppercase">
                     {business.name || 'SMARTCORE ICT CENTRE'}
                   </div>
@@ -288,6 +295,13 @@ export const SaleReceiptModal: React.FC<SaleReceiptModalProps> = ({
               <div className="w-[320px] bg-white p-4 shadow-sm border border-slate-300 font-mono text-xs text-black leading-tight selection:bg-slate-200">
                 {/* Header */}
                 <div className="text-center space-y-1 pb-2">
+                  {business.logoUrl && (
+                    <img
+                      src={business.logoUrl}
+                      alt={business.name}
+                      className="h-9 max-w-[150px] object-contain mx-auto mb-1 filter grayscale"
+                    />
+                  )}
                   <div className="font-bold text-sm tracking-tight uppercase">
                     {business.name || 'SMARTCORE ICT CENTRE'}
                   </div>
@@ -431,10 +445,18 @@ export const SaleReceiptModal: React.FC<SaleReceiptModalProps> = ({
                 {/* Organization Header */}
                 <div className="flex flex-col sm:flex-row justify-between items-start border-b-2 border-slate-900 pb-5 gap-4">
                   <div>
-                    <div className="flex items-center gap-2">
-                      <div className="w-7 h-7 rounded-md bg-[#4C0196] flex items-center justify-center text-white font-bold text-sm">
-                        S
-                      </div>
+                    <div className="flex items-center gap-2.5">
+                      {business.logoUrl ? (
+                        <img
+                          src={business.logoUrl}
+                          alt={business.name}
+                          className="h-10 max-w-[160px] object-contain rounded"
+                        />
+                      ) : (
+                        <div className="w-8 h-8 rounded-md bg-[#4C0196] flex items-center justify-center text-white font-bold text-base">
+                          {business.name ? business.name[0] : 'S'}
+                        </div>
+                      )}
                       <h1 className="text-xl font-bold text-slate-900 tracking-tight">
                         {business.name}
                       </h1>
