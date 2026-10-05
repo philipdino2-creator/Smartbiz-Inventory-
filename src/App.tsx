@@ -155,7 +155,7 @@ const AppContent: React.FC = () => {
   }, []);
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col text-slate-900 selection:bg-purple-100 selection:text-purple-900">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col text-slate-900 dark:text-slate-100 selection:bg-purple-100 dark:selection:bg-purple-900 selection:text-purple-900 dark:selection:text-purple-100 transition-colors duration-200">
       {/* Splash Screen on Initial Load */}
       {showSplash && <SplashScreen businessName={business.name || 'Smartcore ICT Centre'} />}
 
@@ -247,6 +247,10 @@ const AppContent: React.FC = () => {
         onClose={() => setIsMoreDrawerOpen(false)}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
+        onOpenLogin={() => {
+          setIsMoreDrawerOpen(false);
+          setIsLoginOpen(true);
+        }}
       />
 
       {/* Modals */}

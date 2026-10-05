@@ -198,6 +198,9 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'view_customers',
     'create_customer',
     'view_catalog',
+    'create_product',
+    'edit_product',
+    'delete_product',
   ],
 };
 

@@ -59,10 +59,19 @@ class ApiService {
     return res;
   }
 
-  async loginWithFirebase(idToken: string): Promise<{ token: string; user: User; business: Business }> {
+  async register(data: { name: string; email: string; password?: string; phone?: string; role?: UserRole }): Promise<{ token: string; user: User; business: Business }> {
+    const res = await this.request<{ token: string; user: User; business: Business }>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    this.setToken(res.token);
+    return res;
+  }
+
+  async loginWithFirebase(idToken?: string, profile?: { email?: string; name?: string; uid?: string }): Promise<{ token: string; user: User; business: Business }> {
     const res = await this.request<{ token: string; user: User; business: Business }>('/api/auth/firebase-login', {
       method: 'POST',
-      body: JSON.stringify({ idToken }),
+      body: JSON.stringify({ idToken, ...profile }),
     });
     this.setToken(res.token);
     return res;

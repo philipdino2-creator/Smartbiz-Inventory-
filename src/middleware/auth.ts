@@ -293,7 +293,7 @@ export const requireAuth = async (req: AuthRequest, res: Response, next: NextFun
       next();
       return;
     } else {
-      res.status(401).json({ error: 'Unauthorized: No Smartcore Ledger account linked to this credential' });
+      res.status(401).json({ error: 'Unauthorized: No BizFlow account linked to this credential' });
       return;
     }
   } catch (error) {

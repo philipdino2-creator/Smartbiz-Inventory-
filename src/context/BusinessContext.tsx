@@ -434,6 +434,10 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const setCurrentUser = (user: User) => {
     setCurrentUserId(user.id);
+    try {
+      localStorage.setItem(STORAGE_KEYS.CURRENT_USER_ID, user.id);
+    } catch {}
+    setUsers(prev => (prev.some(u => u.id === user.id) ? prev.map(u => (u.id === user.id ? user : u)) : [user, ...prev]));
   };
 
   const addUser = (userData: Omit<User, 'id' | 'businessId'>): { success: boolean; user?: User; message?: string } => {
@@ -1197,7 +1201,7 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
     setProducts(prev => [newProd, ...prev]);
     addAuditLog('create', 'catalog', newProd.id, `Created ${newProd.type}: ${newProd.name}`);
-    api.createProduct(productData).catch(() => {});
+    api.createProduct(newProd).catch(() => {});
     return newProd;
   };
 
