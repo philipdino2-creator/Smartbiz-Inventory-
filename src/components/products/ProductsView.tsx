@@ -20,6 +20,7 @@ export const ProductsView: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | 'product' | 'service'>('all');
   const [isAddingItem, setIsAddingItem] = useState(false);
+  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
 
   // New item form
   const [name, setName] = useState('');
@@ -86,8 +87,35 @@ export const ProductsView: React.FC = () => {
       alert('Permission Denied: Staff members cannot delete catalog items.');
       return;
     }
-    if (window.confirm(`Delete ${prod.type} "${prod.name}"?`)) {
+    if (window.confirm(`Delete ${prod.type} "${prod.name}" from catalog?`)) {
       deleteProduct(prod.id);
+      setSelectedProductIds(prev => prev.filter(id => id !== prod.id));
+    }
+  };
+
+  const handleToggleSelect = (id: string) => {
+    setSelectedProductIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  const handleSelectAll = () => {
+    if (selectedProductIds.length === filteredProducts.length) {
+      setSelectedProductIds([]);
+    } else {
+      setSelectedProductIds(filteredProducts.map(p => p.id));
+    }
+  };
+
+  const handleBatchDelete = () => {
+    if (currentUser.role === 'staff') {
+      alert('Permission Denied: Staff members cannot delete catalog items.');
+      return;
+    }
+    if (selectedProductIds.length === 0) return;
+    if (window.confirm(`Delete ${selectedProductIds.length} selected item(s) permanently from the catalog?`)) {
+      selectedProductIds.forEach(id => deleteProduct(id));
+      setSelectedProductIds([]);
     }
   };
 
@@ -179,10 +207,20 @@ export const ProductsView: React.FC = () => {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs">
         <div>
-          <h1 className="text-xl font-bold text-slate-900 tracking-tight">Products &amp; Training Courses</h1>
-          <p className="text-xs text-slate-500">Manage course catalogue, training programs, accessories, and inventory</p>
+          <h1 className="text-xl font-bold text-slate-900 tracking-tight">Items &amp; Services (Products &amp; Services)</h1>
+          <p className="text-xs text-slate-500">Manage courses, training programs, physical products, accessories, and catalog pricing</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {selectedProductIds.length > 0 && currentUser.role !== 'staff' && (
+            <button
+              onClick={handleBatchDelete}
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-sm transition-all cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete ({selectedProductIds.length}) Selected</span>
+            </button>
+          )}
+
           <ExportDropdown
             onExportCSV={handleExportCSV}
             onExportExcel={handleExportExcel}
@@ -195,7 +233,7 @@ export const ProductsView: React.FC = () => {
             className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-[#4C0196] hover:bg-[#3b0075] rounded-lg shadow-sm transition-all cursor-pointer self-start sm:self-auto"
           >
             <Plus className="w-4 h-4" />
-            <span>+ Add Course or Product</span>
+            <span>+ Create Product / Service</span>
           </button>
         </div>
       </div>
@@ -250,6 +288,15 @@ export const ProductsView: React.FC = () => {
             <table className="w-full text-left text-xs border-collapse">
               <thead>
                 <tr className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold">
+                  <th className="py-3 px-3 w-10 text-center">
+                    <input
+                      type="checkbox"
+                      checked={selectedProductIds.length === filteredProducts.length && filteredProducts.length > 0}
+                      onChange={handleSelectAll}
+                      className="rounded border-slate-300 text-[#4C0196] focus:ring-[#4C0196] cursor-pointer"
+                      title="Select all items for bulk delete"
+                    />
+                  </th>
                   <th className="py-3 px-4">Item Name &amp; Description</th>
                   <th className="py-3 px-4">Type</th>
                   <th className="py-3 px-4">Category</th>
@@ -265,9 +312,19 @@ export const ProductsView: React.FC = () => {
                   const marginPct = item.sellingPrice > 0 ? ((item.sellingPrice - item.costPrice) / item.sellingPrice) * 100 : 0;
                   const isProduct = item.type === 'product';
                   const isLowStock = isProduct && typeof item.currentStock === 'number' && item.currentStock <= (item.minStockLevel || 5);
+                  const isSelected = selectedProductIds.includes(item.id);
 
                   return (
-                    <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
+                    <tr key={item.id} className={`hover:bg-slate-50/80 transition-colors ${isSelected ? 'bg-purple-50/40' : ''}`}>
+                      <td className="py-3 px-3 text-center">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => handleToggleSelect(item.id)}
+                          className="rounded border-slate-300 text-[#4C0196] focus:ring-[#4C0196] cursor-pointer"
+                        />
+                      </td>
+
                       <td className="py-3 px-4">
                         <div className="font-semibold text-slate-900">{item.name}</div>
                         {item.description && (
@@ -320,10 +377,11 @@ export const ProductsView: React.FC = () => {
                         {currentUser.role !== 'staff' && (
                           <button
                             onClick={() => handleDelete(item)}
-                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
-                            title="Delete Item"
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs text-rose-700 bg-rose-50 hover:bg-rose-100 hover:border-rose-300 border border-rose-200 rounded-md transition-colors cursor-pointer font-medium"
+                            title={`Delete ${item.name} from catalog`}
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Delete</span>
                           </button>
                         )}
                       </td>
@@ -341,10 +399,10 @@ export const ProductsView: React.FC = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs">
           <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden animate-in fade-in duration-200">
             <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-              <h3 className="text-base font-bold text-slate-900">+ Add Course or Product</h3>
+              <h3 className="text-base font-bold text-slate-900">+ Create Product or Service</h3>
               <button
                 onClick={() => setIsAddingItem(false)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>

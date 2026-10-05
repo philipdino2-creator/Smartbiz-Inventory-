@@ -45,8 +45,8 @@ export const MobileMoreDrawer: React.FC<MobileMoreDrawerProps> = ({
     },
     {
       id: 'products',
-      label: 'Courses & Products Catalog',
-      desc: 'Training courses, fees, accessories, and stock levels',
+      label: 'Items & Services',
+      desc: 'Courses, tuition, physical products, inventory stock & pricing',
       icon: Package,
     },
     {

@@ -30,7 +30,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     { id: 'recurring', label: 'Recurring' },
     { id: 'customers', label: 'Debtors' },
     { id: 'payables', label: 'Payables' },
-    { id: 'products', label: 'Catalog' },
+    { id: 'products', label: 'Items & Services' },
     { id: 'ledger', label: 'Ledger' },
     { id: 'reports', label: 'Reports' },
     { id: 'settings', label: 'Settings' },
