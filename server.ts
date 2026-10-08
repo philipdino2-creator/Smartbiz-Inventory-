@@ -176,9 +176,131 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
   }
 });
 
+// In-memory or temporary reset tokens map (stores token -> { userId, expiresAt })
+const passwordResetTokens = new Map<string, { userId: string; expiresAt: number }>();
+
+// Password Recovery: Request Reset Token
+app.post('/api/auth/forgot-password', async (req: Request, res: Response) => {
+  const { email } = req.body;
+  if (!email || !email.trim()) {
+    res.status(400).json({ error: 'Email address is required' });
+    return;
+  }
+
+  try {
+    const cleanEmail = email.trim().toLowerCase();
+    const userList = await db.select().from(schema.users).where(eq(schema.users.email, cleanEmail)).limit(1);
+    if (userList.length === 0) {
+      // Do not disclose whether email exists
+      res.json({
+        success: true,
+        message: 'If an account exists with this email, a reset token has been generated.',
+      });
+      return;
+    }
+
+    const u = userList[0];
+    const token = `smt_rst_${crypto.randomBytes(24).toString('hex')}`;
+    // 1 hour expiry
+    passwordResetTokens.set(token, {
+      userId: u.id,
+      expiresAt: Date.now() + 60 * 60 * 1000,
+    });
+
+    await logServerAudit(
+      u.businessId,
+      u.id,
+      u.name,
+      u.role,
+      'password_reset_request',
+      'user',
+      u.id,
+      `Password reset requested for ${u.email}`
+    );
+
+    res.json({
+      success: true,
+      message: 'Password reset token generated successfully. In production this is sent via email.',
+      token, // Provided directly in preview response for verification testing
+    });
+  } catch (err: any) {
+    console.error('Password reset request error:', err);
+    res.status(500).json({ error: 'Failed to process password reset request' });
+  }
+});
+
+// Password Recovery: Verify Token & Update Password
+app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
+  const { token, newPassword } = req.body;
+  if (!token || !newPassword) {
+    res.status(400).json({ error: 'Reset token and new password are required' });
+    return;
+  }
+
+  if (newPassword.length < 6) {
+    res.status(400).json({ error: 'New password must be at least 6 characters long' });
+    return;
+  }
+
+  const resetEntry = passwordResetTokens.get(token);
+  if (!resetEntry || resetEntry.expiresAt <= Date.now()) {
+    res.status(400).json({ error: 'Invalid or expired password reset token' });
+    return;
+  }
+
+  try {
+    const passwordHash = bcrypt.hashSync(newPassword, 10);
+    await db.update(schema.users)
+      .set({ passwordHash, updatedAt: new Date() })
+      .where(eq(schema.users.id, resetEntry.userId));
+
+    // Invalidate token
+    passwordResetTokens.delete(token);
+
+    const userList = await db.select().from(schema.users).where(eq(schema.users.id, resetEntry.userId)).limit(1);
+    if (userList.length > 0) {
+      const u = userList[0];
+      await logServerAudit(
+        u.businessId,
+        u.id,
+        u.name,
+        u.role,
+        'password_reset_complete',
+        'user',
+        u.id,
+        `Password was updated successfully`
+      );
+    }
+
+    res.json({
+      success: true,
+      message: 'Password has been reset successfully.',
+    });
+  } catch (err: any) {
+    console.error('Reset password confirmation error:', err);
+    res.status(500).json({ error: 'Failed to update password' });
+  }
+});
+
 // Database User Registration / Sign Up
 app.post(['/api/auth/register', '/api/auth/signup'], async (req: Request, res: Response) => {
-  const { name, email, password, phone, role } = req.body;
+  const {
+    name,
+    email,
+    password,
+    phone,
+    role,
+    businessName,
+    businessCategory,
+    businessPhone,
+    businessEmail,
+    businessAddress,
+    businessCurrency,
+    businessCurrencySymbol,
+    businessTaxRate,
+    businessLogoUrl,
+  } = req.body;
+
   if (!name || !name.trim()) {
     res.status(400).json({ error: 'Full name is required' });
     return;
@@ -197,11 +319,38 @@ app.post(['/api/auth/register', '/api/auth/signup'], async (req: Request, res: R
       return;
     }
 
-    const biz = await db.select().from(schema.businesses).limit(1);
-    const bizId = biz.length > 0 ? biz[0].id : 'biz_smartcore_001';
+    let bizId: string;
+    let businessRecord: any;
+
+    if (businessName || role === 'owner') {
+      const newBizId = `biz_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+      await db.insert(schema.businesses).values({
+        id: newBizId,
+        name: (businessName || `${name.trim()}'s Business`).trim(),
+        tagline: 'Learn. Create. Innovate.',
+        address: (businessAddress || 'Business Address, Suite 1').trim(),
+        phone: (businessPhone || phone || '+234 800 000 0000').trim(),
+        email: (businessEmail || cleanEmail).trim(),
+        website: '',
+        logoUrl: businessLogoUrl || null,
+        currency: businessCurrency || 'NGN',
+        currencySymbol: businessCurrencySymbol || '₦',
+        taxRate: Number(businessTaxRate) || 7.5,
+        enableTax: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      const insertedBiz = await db.select().from(schema.businesses).where(eq(schema.businesses.id, newBizId)).limit(1);
+      businessRecord = insertedBiz[0];
+      bizId = newBizId;
+    } else {
+      const biz = await db.select().from(schema.businesses).limit(1);
+      bizId = biz.length > 0 ? biz[0].id : 'biz_smartcore_001';
+      businessRecord = biz[0] || null;
+    }
 
     const newId = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const assignedRole = (role === 'owner' || role === 'manager' || role === 'staff') ? role : 'manager';
+    const assignedRole = (role === 'owner' || role === 'manager' || role === 'staff') ? role : (businessName ? 'owner' : 'manager');
     const passwordHash = password ? bcrypt.hashSync(password, 10) : bcrypt.hashSync('smartcore123', 10);
 
     await db.insert(schema.users).values({
@@ -237,7 +386,7 @@ app.post(['/api/auth/register', '/api/auth/signup'], async (req: Request, res: R
         active: u.active,
         permissions: u.permissions,
       },
-      business: biz[0] || null,
+      business: businessRecord,
     });
   } catch (err: any) {
     console.error('Registration error:', err);
@@ -1478,16 +1627,35 @@ app.post('/api/debt-payments', requireAuth, async (req: AuthRequest, res: Respon
     return;
   }
 
+  const targetType = (data.targetType || (data.customerId ? 'customer' : (data.payableId ? 'payable' : 'customer'))) as 'customer' | 'payable';
+  const targetId = data.targetId || data.customerId || data.payableId;
+
+  if (!targetId) {
+    res.status(400).json({ error: 'Target customer or payable identifier is required' });
+    return;
+  }
+
   try {
+    let targetName = data.targetName;
+    if (!targetName) {
+      if (targetType === 'customer') {
+        const c = await db.select().from(schema.customers).where(eq(schema.customers.id, targetId)).limit(1);
+        targetName = c[0]?.name || 'Customer';
+      } else {
+        const p = await db.select().from(schema.payables).where(eq(schema.payables.id, targetId)).limit(1);
+        targetName = p[0]?.vendorName || 'Supplier';
+      }
+    }
+
     const id = `pay_${Date.now()}`;
     const now = new Date().toISOString();
     await db.transaction(async (tx) => {
       await tx.insert(schema.debtPayments).values({
         id,
         businessId: req.businessId!,
-        targetType: data.targetType,
-        targetId: data.targetId,
-        targetName: data.targetName,
+        targetType,
+        targetId,
+        targetName,
         amount: String(numAmount),
         date: data.date || new Date().toISOString().slice(0, 10),
         time: data.time || new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
@@ -1499,27 +1667,27 @@ app.post('/api/debt-payments', requireAuth, async (req: AuthRequest, res: Respon
         createdAt: now,
       });
 
-      if (data.targetType === 'customer') {
+      if (targetType === 'customer') {
         await tx.execute(
           sql`UPDATE customers SET 
                 total_paid = total_paid + ${numAmount},
                 outstanding_debt = GREATEST(0, outstanding_debt - ${numAmount}),
                 updated_at = ${now}
-              WHERE id = ${data.targetId}`
+              WHERE id = ${targetId} AND business_id = ${req.businessId!}`
         );
-      } else if (data.targetType === 'payable') {
+      } else if (targetType === 'payable') {
         await tx.execute(
           sql`UPDATE payables SET 
                 amount_paid = amount_paid + ${numAmount},
                 balance_due = GREATEST(0, balance_due - ${numAmount}),
                 status = CASE WHEN (balance_due - ${numAmount}) <= 0 THEN 'paid' ELSE 'partial' END,
                 updated_at = ${now}
-              WHERE id = ${data.targetId}`
+              WHERE id = ${targetId} AND business_id = ${req.businessId!}`
         );
       }
     });
 
-    await logServerAudit(req.businessId!, req.user!.id, req.user!.name, req.user!.role, 'debt_settled', 'customer', data.targetId, `Collected debt payment of ₦${numAmount.toLocaleString()} from ${data.targetName}`);
+    await logServerAudit(req.businessId!, req.user!.id, req.user!.name, req.user!.role, 'debt_settled', targetType, targetId, `Collected debt payment of ₦${numAmount.toLocaleString()} for ${targetName}`);
     res.json({ success: true, id });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to record debt payment' });

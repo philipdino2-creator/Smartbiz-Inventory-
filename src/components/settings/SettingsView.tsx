@@ -35,6 +35,7 @@ import {
   Upload,
   Image as ImageIcon,
   Link as LinkIcon,
+  LogOut,
 } from 'lucide-react';
 import { BizFlowLogo } from '../common/BizFlowLogo';
 import { ThemeToggle } from '../common/ThemeToggle';
@@ -60,6 +61,7 @@ export const SettingsView: React.FC = () => {
     hasPermission,
     isBackendConnected,
     migrateLegacyLocalStorageData,
+    logout,
   } = useBusiness();
 
   const [isMigrating, setIsMigrating] = useState(false);
@@ -414,6 +416,15 @@ export const SettingsView: React.FC = () => {
               </button>
             ))}
           </div>
+
+          <button
+            onClick={() => logout()}
+            className="px-3 py-1.5 rounded-xl text-xs font-bold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-100 dark:hover:bg-rose-900 border border-rose-200 dark:border-rose-800 transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
+            title="Sign out of current account and lock workspace"
+          >
+            <LogOut className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+            <span>Sign Out</span>
+          </button>
         </div>
       </div>
 
@@ -646,13 +657,13 @@ export const SettingsView: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Company Tagline</label>
+                  <label className="block font-semibold text-slate-700 mb-1">Company Tagline / Slogan</label>
                   <input
                     type="text"
                     value={tagline}
                     onChange={e => setTagline(e.target.value)}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                    placeholder="e.g. Learn. Create. Innovate."
+                    placeholder="e.g. Quality IT Training & Digital Services"
                   />
                 </div>
 

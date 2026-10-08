@@ -2,8 +2,8 @@ import React from 'react';
 import {
   LayoutDashboard,
   Receipt,
+  Package,
   ArrowDownCircle,
-  Users,
   Menu,
 } from 'lucide-react';
 
@@ -21,8 +21,8 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
   const tabs = [
     { id: 'dashboard', label: 'Home', icon: LayoutDashboard },
     { id: 'sales', label: 'Sales', icon: Receipt },
+    { id: 'products', label: 'Products', icon: Package },
     { id: 'expenses', label: 'Expenses', icon: ArrowDownCircle },
-    { id: 'customers', label: 'Debtors', icon: Users },
   ];
 
   return (
@@ -30,7 +30,7 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
       <div className="grid grid-cols-5 items-center h-16 max-w-md mx-auto px-1">
         {tabs.map(tab => {
           const Icon = tab.icon;
-          const isActive = activeTab === tab.id;
+          const isActive = activeTab === tab.id || (tab.id === 'expenses' && ['recurring', 'payables', 'reconciliation'].includes(activeTab));
           return (
             <button
               key={tab.id}
@@ -53,7 +53,7 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
         <button
           onClick={onOpenMoreMenu}
           className={`flex flex-col items-center justify-center h-full min-h-[44px] py-1 cursor-pointer transition-colors ${
-            ['payables', 'products', 'ledger', 'reports', 'settings'].includes(activeTab)
+            ['customers', 'ledger', 'reports', 'settings'].includes(activeTab)
               ? 'text-[#4C0196] dark:text-purple-400'
               : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
           }`}

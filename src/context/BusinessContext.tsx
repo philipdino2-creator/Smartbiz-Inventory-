@@ -122,6 +122,12 @@ interface BusinessContextType {
   resetLedgerToZero: () => Promise<{ success: boolean; message?: string }>;
   exportAllDataJSON: () => string;
 
+  // Authentication & Multi-Tenancy Session State
+  isAuthenticated: boolean;
+  isAuthChecking: boolean;
+  logout: () => Promise<void>;
+  handleAuthSuccess: (user: User, business?: Business | null) => void;
+
   // Migration & Server State
   isBackendConnected: boolean;
   migrateLegacyLocalStorageData: () => Promise<{ success: boolean; message: string; importedCount: number }>;
@@ -147,6 +153,8 @@ const STORAGE_KEYS = {
 
 export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [isBackendConnected, setIsBackendConnected] = useState<boolean>(false);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => Boolean(api.getToken()));
+  const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
 
   // In-memory / initial state loaded from localStorage with fallback to INITIAL_*
   const [business, setBusiness] = useState<Business>(() => {
@@ -321,15 +329,12 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     localStorage.setItem(STORAGE_KEYS.RECONCILIATIONS, JSON.stringify(reconciliations));
   }, [reconciliations]);
 
-  // Sync with PostgreSQL Backend on Mount
+  // Sync with PostgreSQL Backend
   const fetchAllServerData = useCallback(async () => {
-    try {
-      // 1. Ensure token exists
-      if (!api.getToken()) {
-        await api.login('philip@smartcoreict.online', 'smartcore123').catch(() => {});
-      }
+    const token = api.getToken();
+    if (!token) return;
 
-      // 2. Fetch authoritative records
+    try {
       const [
         serverBiz,
         serverUsers,
@@ -374,9 +379,65 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, []);
 
-  useEffect(() => {
-    fetchAllServerData();
+  // Validate session on mount
+  const checkSession = useCallback(async () => {
+    setIsAuthChecking(true);
+    const token = api.getToken();
+    if (!token) {
+      setIsAuthenticated(false);
+      setIsAuthChecking(false);
+      return;
+    }
+
+    try {
+      const me = await api.getMe();
+      if (me && me.user) {
+        setIsAuthenticated(true);
+        setCurrentUserId(me.user.id);
+        if (me.business) {
+          setBusiness(me.business);
+        }
+        setUsers(prev => (prev.some(u => u.id === me.user.id) ? prev.map(u => u.id === me.user.id ? me.user : u) : [me.user, ...prev]));
+        await fetchAllServerData();
+      } else {
+        api.setToken(null);
+        setIsAuthenticated(false);
+      }
+    } catch (err) {
+      console.warn('Session verification failed, returning to login:', err);
+      api.setToken(null);
+      setIsAuthenticated(false);
+    } finally {
+      setIsAuthChecking(false);
+    }
   }, [fetchAllServerData]);
+
+  useEffect(() => {
+    checkSession();
+  }, [checkSession]);
+
+  const logout = async () => {
+    try {
+      await api.logout();
+    } catch (e) {
+      console.warn('Logout error:', e);
+    }
+    api.setToken(null);
+    try {
+      localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_ID);
+    } catch {}
+    setIsAuthenticated(false);
+  };
+
+  const handleAuthSuccess = (authUser: User, authBusiness?: Business | null) => {
+    setIsAuthenticated(true);
+    setCurrentUserId(authUser.id);
+    if (authBusiness) {
+      setBusiness(authBusiness);
+    }
+    setUsers(prev => (prev.some(u => u.id === authUser.id) ? prev.map(u => (u.id === authUser.id ? authUser : u)) : [authUser, ...prev]));
+    fetchAllServerData();
+  };
 
   // Log audit helper
   const addAuditLog = (
@@ -1663,6 +1724,11 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         resetToDemoData,
         resetLedgerToZero,
         exportAllDataJSON,
+
+        isAuthenticated,
+        isAuthChecking,
+        logout,
+        handleAuthSuccess,
 
         isBackendConnected,
         migrateLegacyLocalStorageData,

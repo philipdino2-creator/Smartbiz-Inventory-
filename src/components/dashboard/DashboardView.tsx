@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { useBusiness } from '../../context/BusinessContext';
-import { formatCurrency, formatDate, getTodayDateString, getRecurringDueStatus } from '../../utils/calculations';
-import { SalesExpenseTrendChart, ExpenseCategoryBreakdown } from '../common/Charts';
+import { formatCurrency, formatDate, getTodayDateString } from '../../utils/calculations';
+import { SalesExpenseTrendChart } from '../common/Charts';
 import {
   TrendingUp,
   TrendingDown,
@@ -12,16 +12,20 @@ import {
   Package,
   PlusCircle,
   MinusCircle,
-  Clock,
+  Plus,
   Eye,
-  CalendarClock,
   CheckCircle2,
+  AlertTriangle,
+  Receipt,
+  ArrowRight,
+  Phone,
 } from 'lucide-react';
 import { Sale, Customer, Payable } from '../../types';
 
 interface DashboardViewProps {
   onOpenRecordSale: () => void;
   onOpenRecordExpense: () => void;
+  onOpenAddProduct?: () => void;
   onViewSaleReceipt: (sale: Sale) => void;
   onOpenCollectDebt: (customer: Customer) => void;
   onOpenPaySupplier: (payable: Payable) => void;
@@ -31,6 +35,7 @@ interface DashboardViewProps {
 export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenRecordSale,
   onOpenRecordExpense,
+  onOpenAddProduct,
   onViewSaleReceipt,
   onOpenCollectDebt,
   onOpenPaySupplier,
@@ -43,8 +48,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     customers,
     payables,
     products,
-    recurringExpenses,
-    recordAllDueRecurringExpenses,
     metrics,
     hasPermission,
   } = useBusiness();
@@ -53,23 +56,37 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const canViewProfit = hasPermission('view_profit');
   const canViewReports = hasPermission('view_reports');
 
-  // Recurring status counts
-  const overdueRecCount = useMemo(() => {
-    return recurringExpenses.filter(r => r.status === 'active' && getRecurringDueStatus(r.nextDueDate, today) === 'overdue').length;
-  }, [recurringExpenses, today]);
+  // Low stock items
+  const lowStockItems = useMemo(() => {
+    return products.filter(
+      p => p.type === 'product' && typeof p.currentStock === 'number' && p.currentStock <= (p.minStockLevel || 5)
+    );
+  }, [products]);
 
-  const dueSoonRecCount = useMemo(() => {
-    return recurringExpenses.filter(r => {
-      const s = getRecurringDueStatus(r.nextDueDate, today);
-      return r.status === 'active' && (s === 'due_today' || s === 'due_soon');
-    }).length;
-  }, [recurringExpenses, today]);
+  // Debtors list (top 3)
+  const topDebtors = useMemo(() => {
+    return customers
+      .filter(c => c.outstandingDebt > 0)
+      .sort((a, b) => b.outstandingDebt - a.outstandingDebt)
+      .slice(0, 3);
+  }, [customers]);
 
-  const upcomingRecCount = useMemo(() => {
-    return recurringExpenses.filter(r => r.status === 'active' && getRecurringDueStatus(r.nextDueDate, today) === 'upcoming').length;
-  }, [recurringExpenses, today]);
+  // Payables list (top 2)
+  const topPayables = useMemo(() => {
+    return payables
+      .filter(p => p.balanceDue > 0)
+      .sort((a, b) => b.balanceDue - a.balanceDue)
+      .slice(0, 2);
+  }, [payables]);
 
-  // Prepare 7-day trend data
+  // Recent 5 sales
+  const recentSales = useMemo(() => {
+    return [...sales]
+      .sort((a, b) => `${b.date}T${b.time}`.localeCompare(`${a.date}T${a.time}`))
+      .slice(0, 5);
+  }, [sales]);
+
+  // Prepare 7-day trend data for lightweight chart
   const trendData = useMemo(() => {
     const days = [];
     for (let i = 6; i >= 0; i--) {
@@ -89,7 +106,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         .filter(e => e.date === dateStr)
         .reduce((sum, e) => sum + e.amount, 0);
 
-      // Only compute and expose COGS/Profit if user has view_profit permission
       let dayProfit = 0;
       if (canViewProfit) {
         const dayVat = sales
@@ -113,496 +129,494 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     return days;
   }, [sales, expenses, canViewProfit]);
 
-  // Prepare category breakdown for current month
-  const categoryBreakdown = useMemo(() => {
-    const currentMonth = today.slice(0, 7);
-    const monthExpenses = expenses.filter(e => e.date.startsWith(currentMonth));
-    const totalMonthExp = monthExpenses.reduce((sum, e) => sum + e.amount, 0);
+  const handleAddProduct = () => {
+    if (onOpenAddProduct) {
+      onOpenAddProduct();
+    } else {
+      setActiveTab('products');
+    }
+  };
 
-    const catMap: Record<string, number> = {};
-    monthExpenses.forEach(e => {
-      catMap[e.category] = (catMap[e.category] || 0) + e.amount;
-    });
-
-    return Object.entries(catMap)
-      .map(([name, amount]) => ({
-        name,
-        amount,
-        percentage: totalMonthExp > 0 ? (amount / totalMonthExp) * 100 : 0,
-      }))
-      .sort((a, b) => b.amount - a.amount);
-  }, [expenses, today]);
-
-  // Debtors list (top 3)
-  const topDebtors = useMemo(() => {
-    return customers
-      .filter(c => c.outstandingDebt > 0)
-      .sort((a, b) => b.outstandingDebt - a.outstandingDebt)
-      .slice(0, 4);
-  }, [customers]);
-
-  // Payables list (top 2)
-  const topPayables = useMemo(() => {
-    return payables
-      .filter(p => p.balanceDue > 0)
-      .sort((a, b) => b.balanceDue - a.balanceDue)
-      .slice(0, 3);
-  }, [payables]);
-
-  // Low stock products
-  const lowStockItems = useMemo(() => {
-    return products.filter(
-      p => p.type === 'product' && typeof p.currentStock === 'number' && p.currentStock <= (p.minStockLevel || 5)
-    );
-  }, [products]);
-
-  // Recent combined transactions
-  const recentActivities = useMemo(() => {
-    const combined = [
-      ...sales.map(s => ({
-        id: s.id,
-        type: 'sale' as const,
-        title: `Sale: ${s.customerName}`,
-        amount: s.totalAmount,
-        date: s.date,
-        time: s.time,
-        status: s.paymentStatus,
-        method: s.paymentMethod,
-        raw: s,
-      })),
-      ...expenses.map(e => ({
-        id: e.id,
-        type: 'expense' as const,
-        title: `Expense: ${e.category} (${e.vendorName})`,
-        amount: e.amount,
-        date: e.date,
-        time: e.time,
-        status: 'paid' as const,
-        method: e.paymentMethod,
-        raw: e,
-      })),
-    ];
-    return combined.sort((a, b) => `${b.date}T${b.time}`.localeCompare(`${a.date}T${a.time}`)).slice(0, 6);
-  }, [sales, expenses]);
+  const hasAttentionItems = topDebtors.length > 0 || lowStockItems.length > 0 || topPayables.length > 0;
 
   return (
     <div className="space-y-6 pb-12">
-      {/* Top Welcome & Quick Action Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs">
+      {/* 1. TOP HEADER & PRIMARY MVP ACTIONS */}
+      <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-4 transition-colors">
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-md bg-purple-50 text-[#4C0196] border border-purple-200">
-              BizFlow Dashboard
+            <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-md bg-purple-50 dark:bg-purple-950/60 text-[#4C0196] dark:text-purple-300 border border-purple-200 dark:border-purple-800">
+              BizFlow MVP
             </span>
             <span className="text-xs text-slate-400">·</span>
-            <span className="text-xs text-slate-500 font-medium">{business.name || 'Smartcore ICT Centre'}</span>
+            <span className="text-xs text-slate-600 dark:text-slate-400 font-medium">
+              {business.name || 'Smartcore ICT Centre'}
+            </span>
           </div>
-          <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
-            {business.name || 'Smartcore ICT Centre'} Position
+          <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
+            Business Overview
           </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Real-time cash flow, receivables, payables, and estimated net profit.
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+            Real-time sales, profit, cash flow, and debt position · {formatDate(today)}
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        {/* The 3 Primary Actions (Never buried in menus) */}
+        <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
+          <button
+            onClick={handleAddProduct}
+            className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-all cursor-pointer border border-slate-200 dark:border-slate-700 shadow-2xs"
+            title="Add a new course, training program, or physical item to your inventory"
+          >
+            <Package className="w-4 h-4 text-slate-500 dark:text-slate-400" />
+            <span>+ Add Product</span>
+          </button>
+
           <button
             onClick={onOpenRecordExpense}
-            className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-4 py-2.5 text-xs font-bold text-[#7B001C] bg-rose-50 hover:bg-rose-100 rounded-xl border border-rose-200 transition-all cursor-pointer shadow-2xs"
+            className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-[#7B001C] dark:text-rose-400 bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-100 dark:hover:bg-rose-900/60 rounded-xl transition-all cursor-pointer border border-rose-200 dark:border-rose-900/60 shadow-2xs"
+            title="Record fuel, shop rent, supplies, or operating cost"
           >
-            <MinusCircle className="w-4 h-4" />
-            <span>+ Record Expense</span>
+            <MinusCircle className="w-4 h-4 text-[#7B001C] dark:text-rose-400" />
+            <span>+ Add Expense</span>
           </button>
+
           <button
             onClick={onOpenRecordSale}
-            className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-5 py-2.5 text-xs font-bold text-white bg-[#4C0196] hover:bg-[#3b0075] rounded-xl transition-all cursor-pointer shadow-md"
+            className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold text-white bg-[#4C0196] hover:bg-[#3b0075] rounded-xl transition-all cursor-pointer shadow-md active:scale-98"
+            title="Record a customer purchase or student course fee"
           >
             <PlusCircle className="w-4 h-4" />
-            <span>+ Record Sale</span>
+            <span>+ New Sale</span>
           </button>
         </div>
       </div>
 
-      {/* TODAY'S POSITION CARDS */}
+      {/* 2. CORE MVP BUSINESS INDICATORS (Clear Visual Hierarchy: 4-5 focused metrics) */}
       <div>
-        <div className="flex items-center justify-between mb-2 px-1">
-          <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-            Today's Position ({formatDate(today)})
-          </h2>
-          <span className="text-xs font-medium text-slate-400">Africa/Lagos</span>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          {/* Today's Sales */}
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-xs font-medium">Today's Invoiced Sales</span>
-              <div className="p-1 rounded-md bg-purple-50 text-[#4C0196]">
-                <ArrowDownLeft className="w-4 h-4" />
-              </div>
-            </div>
-            <div className="text-xl sm:text-2xl font-bold font-mono text-slate-900 tabular-nums">
-              {formatCurrency(metrics.todayGrossInvoiced || metrics.todaySales, business.currencySymbol)}
-            </div>
-            <div className="text-[11px] text-slate-500 mt-1 flex items-center justify-between gap-1">
-              {metrics.todayVatCollected > 0 ? (
-                <span>
-                  Net: <span className="font-semibold text-slate-700 font-mono">{formatCurrency(metrics.todayOperatingRevenue, business.currencySymbol)}</span>
-                  {' · '}
-                  VAT: <span className="font-semibold text-purple-700 font-mono">{formatCurrency(metrics.todayVatCollected, business.currencySymbol)}</span>
-                </span>
-              ) : (
-                <span>
-                  Cash collected: <span className="font-semibold text-slate-700 font-mono">{formatCurrency(metrics.todayCashCollected, business.currencySymbol)}</span>
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* Today's Expenses */}
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-xs font-medium">Today's Expenses</span>
-              <div className="p-1 rounded-md bg-rose-50 text-[#7B001C]">
-                <ArrowUpRight className="w-4 h-4" />
-              </div>
-            </div>
-            <div className="text-xl sm:text-2xl font-bold font-mono text-[#7B001C] tabular-nums">
-              {formatCurrency(metrics.todayExpenses, business.currencySymbol)}
-            </div>
-            <div className="text-[11px] text-slate-500 mt-1">
-              Generator, fuel, supplies &amp; operations
-            </div>
-          </div>
-
-          {/* Card 3: Today's Estimated Net Profit (Restricted to users with view_profit) */}
-          {canViewProfit ? (
-            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-              <div className="flex items-center justify-between text-slate-500 mb-1">
-                <span className="text-xs font-medium">Today's Net Gain</span>
-                <div className={`p-1 rounded-md ${metrics.todayProfit >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>
-                  {metrics.todayProfit >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
-                </div>
-              </div>
-              <div className={`text-xl sm:text-2xl font-bold font-mono tabular-nums ${metrics.todayProfit >= 0 ? 'text-emerald-600' : 'text-amber-600'}`}>
-                {formatCurrency(metrics.todayProfit, business.currencySymbol)}
-              </div>
-              <div className="text-[11px] text-slate-500 mt-1">
-                Net turnover minus direct costs &amp; expenses (excludes VAT)
-              </div>
-            </div>
-          ) : (
-            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-              <div className="flex items-center justify-between text-slate-500 mb-1">
-                <span className="text-xs font-medium">Today's Activity &amp; Invoices</span>
-                <div className="p-1 rounded-md bg-blue-50 text-blue-600">
-                  <CheckCircle2 className="w-4 h-4" />
-                </div>
-              </div>
-              <div className="text-xl sm:text-2xl font-bold font-mono text-slate-900 tabular-nums">
-                {metrics.todaySalesCount} Invoices
-              </div>
-              <div className="text-[11px] text-slate-500 mt-1">
-                Cash inflow: <span className="font-semibold text-slate-700 font-mono">{formatCurrency(metrics.todayCashCollected, business.currencySymbol)}</span>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* MONTH-TO-DATE & DEBTS POSITION CARDS */}
-      <div>
-        <div className="flex items-center justify-between mb-2 px-1">
-          <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-            This Month &amp; Debt Position
+        <div className="flex items-center justify-between mb-2.5 px-1">
+          <h2 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+            How is your business doing?
           </h2>
           {canViewReports && (
             <button
               onClick={() => setActiveTab('reports')}
-              className="text-xs font-semibold text-[#4C0196] hover:underline cursor-pointer"
+              className="text-xs font-semibold text-[#4C0196] dark:text-purple-400 hover:underline flex items-center gap-1 cursor-pointer"
             >
-              View Full P&amp;L Report →
+              <span>Detailed Reports</span>
+              <ArrowRight className="w-3 h-3" />
             </button>
           )}
         </div>
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-          {/* Month Sales */}
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-            <span className="text-xs text-slate-500 font-medium block mb-1">Month's Sales</span>
-            <div className="text-lg sm:text-xl font-bold font-mono text-slate-900 tabular-nums">
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
+          {/* 1. REVENUE (Dominant Hero Card) */}
+          <div className="bg-white dark:bg-slate-900 p-4.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs space-y-2">
+            <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
+              <span className="text-xs font-semibold">Total Revenue</span>
+              <div className="p-1 rounded-md bg-purple-50 dark:bg-purple-950/60 text-[#4C0196] dark:text-purple-300">
+                <ArrowDownLeft className="w-3.5 h-3.5" />
+              </div>
+            </div>
+            <div className="text-xl sm:text-2xl font-black font-mono text-slate-900 dark:text-white tabular-nums tracking-tight">
               {formatCurrency(metrics.monthGrossInvoiced || metrics.monthSales, business.currencySymbol)}
             </div>
-            <span className="text-[11px] text-slate-400 mt-1 block">
-              {metrics.monthVatCollected > 0
-                ? `Net: ${formatCurrency(metrics.monthOperatingRevenue, business.currencySymbol)}`
-                : 'Month to date'}
-            </span>
+            <div className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center justify-between pt-1 border-t border-slate-100 dark:border-slate-800">
+              <span>Today:</span>
+              <span className="font-mono font-bold text-slate-800 dark:text-slate-200">
+                {formatCurrency(metrics.todayGrossInvoiced || metrics.todaySales, business.currencySymbol)}
+              </span>
+            </div>
           </div>
 
-          {/* Month Expenses */}
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-            <span className="text-xs text-slate-500 font-medium block mb-1">Month's Expenses</span>
-            <div className="text-lg sm:text-xl font-bold font-mono text-[#7B001C] tabular-nums">
-              {formatCurrency(metrics.monthExpenses, business.currencySymbol)}
+          {/* 2. PROFIT / GAIN */}
+          <div className="bg-white dark:bg-slate-900 p-4.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs space-y-2">
+            <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
+              <span className="text-xs font-semibold">Net Profit (Est.)</span>
+              <div className={`p-1 rounded-md ${metrics.monthProfit >= 0 ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400' : 'bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400'}`}>
+                {metrics.monthProfit >= 0 ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
+              </div>
             </div>
-            <span className="text-[11px] text-slate-400 mt-1 block">Total operating costs</span>
+            {canViewProfit ? (
+              <div className={`text-xl sm:text-2xl font-black font-mono tabular-nums tracking-tight ${metrics.monthProfit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                {formatCurrency(metrics.monthProfit, business.currencySymbol)}
+              </div>
+            ) : (
+              <div className="text-lg font-bold text-slate-400 italic">
+                Restricted
+              </div>
+            )}
+            <div className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center justify-between pt-1 border-t border-slate-100 dark:border-slate-800">
+              <span>Today's Gain:</span>
+              <span className="font-mono font-semibold text-slate-800 dark:text-slate-200">
+                {canViewProfit ? formatCurrency(metrics.todayProfit, business.currencySymbol) : '—'}
+              </span>
+            </div>
           </div>
 
-          {/* Customers Owing (Receivables) */}
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-xs text-slate-500 font-medium">Customers Owe Us</span>
-              <Users className="w-3.5 h-3.5 text-amber-500" />
+          {/* 3. OUTSTANDING DEBT (Customers Owe Us) */}
+          <div className="bg-white dark:bg-slate-900 p-4.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs space-y-2">
+            <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
+              <span className="text-xs font-semibold">Customers Owe You</span>
+              <div className="p-1 rounded-md bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400">
+                <Users className="w-3.5 h-3.5" />
+              </div>
             </div>
-            <div className="text-lg sm:text-xl font-bold font-mono text-amber-600 tabular-nums">
+            <div className="text-xl sm:text-2xl font-black font-mono text-amber-600 dark:text-amber-400 tabular-nums tracking-tight">
               {formatCurrency(metrics.totalReceivables, business.currencySymbol)}
             </div>
-            <button
-              onClick={() => setActiveTab('customers')}
-              className="text-[11px] text-[#4C0196] font-semibold hover:underline mt-1 block"
-            >
-              Debtors ({customers.filter(c => c.outstandingDebt > 0).length}) →
-            </button>
-          </div>
-
-          {/* We Owe Suppliers (Payables) */}
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-xs text-slate-500 font-medium">We Owe Suppliers</span>
-              <AlertCircle className="w-3.5 h-3.5 text-[#7B001C]" />
-            </div>
-            <div className="text-lg sm:text-xl font-bold font-mono text-[#7B001C] tabular-nums">
-              {formatCurrency(metrics.totalPayables, business.currencySymbol)}
-            </div>
-            <button
-              onClick={() => setActiveTab('payables')}
-              className="text-[11px] text-[#7B001C] font-semibold hover:underline mt-1 block"
-            >
-              Payables ({payables.filter(p => p.balanceDue > 0).length}) →
-            </button>
-          </div>
-
-          {/* Recurring Expenses Card */}
-          <div
-            onClick={() => setActiveTab('recurring')}
-            className="col-span-2 lg:col-span-1 bg-white p-4 rounded-xl border border-slate-200 shadow-2xs hover:border-[#4C0196] transition-colors cursor-pointer group"
-          >
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-xs font-semibold text-slate-900 group-hover:text-[#4C0196] transition-colors">
-                Recurring Expenses
-              </span>
-              <CalendarClock className="w-3.5 h-3.5 text-[#4C0196]" />
-            </div>
-            <div className="text-xs space-y-0.5 mt-1 font-medium">
-              <div className="flex items-center justify-between">
-                <span className="text-[#7B001C] flex items-center gap-1 font-bold">
-                  <span className="text-[11px]">🔴</span> {overdueRecCount} Overdue
-                </span>
-                <span className="text-amber-700 flex items-center gap-1">
-                  <span className="text-[11px]">🟡</span> {dueSoonRecCount} Due
-                </span>
-              </div>
-              <div className="flex items-center justify-between text-slate-500 text-[11px] pt-0.5">
-                <span className="text-emerald-700 flex items-center gap-1">
-                  <span className="text-[11px]">🟢</span> {upcomingRecCount} Upcoming
-                </span>
-                <span className="text-[#4C0196] font-semibold group-hover:underline">
-                  View →
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* CHARTS SECTION: 7-DAY TREND & CATEGORY SHARE */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2">
-          <SalesExpenseTrendChart
-            data={trendData}
-            currencySymbol={business.currencySymbol}
-            hideProfit={!canViewProfit}
-          />
-        </div>
-        <div className="lg:col-span-1">
-          <ExpenseCategoryBreakdown categories={categoryBreakdown} currencySymbol={business.currencySymbol} />
-        </div>
-      </div>
-
-      {/* QUICK DEBT COLLECTION & INVENTORY ALERTS */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Top Debtors Watchlist */}
-        <div className="bg-white rounded-xl border border-slate-200 p-4">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-            <div>
-              <h3 className="text-sm font-semibold text-slate-900">Uncollected Customer Debts</h3>
-              <p className="text-xs text-slate-500">Highest outstanding student &amp; client balances</p>
-            </div>
-            <button
-              onClick={() => setActiveTab('customers')}
-              className="text-xs font-semibold text-[#4C0196] hover:underline"
-            >
-              View All Debtors
-            </button>
-          </div>
-
-          <div className="divide-y divide-slate-100 mt-2">
-            {topDebtors.length === 0 ? (
-              <p className="text-xs text-slate-400 py-4 text-center">No outstanding customer debts! All fees collected.</p>
-            ) : (
-              topDebtors.map(debtor => (
-                <div key={debtor.id} className="py-2.5 flex items-center justify-between gap-2">
-                  <div>
-                    <h4 className="text-xs font-semibold text-slate-900">{debtor.name}</h4>
-                    <p className="text-[11px] text-slate-500">{debtor.phone || 'No phone'}</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="font-mono text-xs font-bold text-[#7B001C] tabular-nums">
-                      {formatCurrency(debtor.outstandingDebt, business.currencySymbol)}
-                    </span>
-                    <button
-                      onClick={() => onOpenCollectDebt(debtor)}
-                      className="px-2.5 py-1 text-[11px] font-semibold text-[#4C0196] bg-purple-50 hover:bg-purple-100 rounded-lg border border-purple-200 transition-colors cursor-pointer"
-                    >
-                      Collect
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* Suppliers We Owe & Low Stock Alerts */}
-        <div className="space-y-4">
-          {/* Supplier Payables */}
-          <div className="bg-white rounded-xl border border-slate-200 p-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div>
-                <h3 className="text-sm font-semibold text-slate-900">Upcoming Supplier Payables</h3>
-                <p className="text-xs text-slate-500">Fuel, stationery, or inventory debts</p>
-              </div>
+            <div className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center justify-between pt-1 border-t border-slate-100 dark:border-slate-800">
+              <span>Debtors:</span>
               <button
-                onClick={() => setActiveTab('payables')}
-                className="text-xs font-semibold text-[#7B001C] hover:underline"
+                onClick={() => setActiveTab('customers')}
+                className="font-semibold text-[#4C0196] dark:text-purple-400 hover:underline cursor-pointer"
               >
-                View Payables
+                {customers.filter(c => c.outstandingDebt > 0).length} customer(s) →
               </button>
             </div>
+          </div>
 
-            <div className="divide-y divide-slate-100 mt-2">
-              {topPayables.length === 0 ? (
-                <p className="text-xs text-slate-400 py-3 text-center">No unpaid supplier debts.</p>
+          {/* 4. EXPENSES (Total Outgoing Costs) */}
+          <div className="bg-white dark:bg-slate-900 p-4.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs space-y-2">
+            <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
+              <span className="text-xs font-semibold">Total Expenses</span>
+              <div className="p-1 rounded-md bg-rose-50 dark:bg-rose-950/60 text-[#7B001C] dark:text-rose-400">
+                <ArrowUpRight className="w-3.5 h-3.5" />
+              </div>
+            </div>
+            <div className="text-xl sm:text-2xl font-black font-mono text-[#7B001C] dark:text-rose-400 tabular-nums tracking-tight">
+              {formatCurrency(metrics.monthExpenses, business.currencySymbol)}
+            </div>
+            <div className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center justify-between pt-1 border-t border-slate-100 dark:border-slate-800">
+              <span>Today:</span>
+              <span className="font-mono font-bold text-slate-800 dark:text-slate-200">
+                {formatCurrency(metrics.todayExpenses, business.currencySymbol)}
+              </span>
+            </div>
+          </div>
+
+          {/* 5. INVENTORY & STOCK HEALTH */}
+          <div className="bg-white dark:bg-slate-900 p-4.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs space-y-2">
+            <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
+              <span className="text-xs font-semibold">Products &amp; Stock</span>
+              <div className="p-1 rounded-md bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400">
+                <Package className="w-3.5 h-3.5" />
+              </div>
+            </div>
+            <div className="text-xl sm:text-2xl font-black font-mono text-slate-900 dark:text-white tabular-nums tracking-tight">
+              {products.length} Items
+            </div>
+            <div className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center justify-between pt-1 border-t border-slate-100 dark:border-slate-800">
+              <span>Stock Status:</span>
+              {lowStockItems.length > 0 ? (
+                <span className="font-bold text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                  {lowStockItems.length} low
+                </span>
               ) : (
-                topPayables.map(payable => (
-                  <div key={payable.id} className="py-2.5 flex items-center justify-between gap-2">
-                    <div>
-                      <h4 className="text-xs font-semibold text-slate-900">{payable.vendorName}</h4>
-                      <p className="text-[11px] text-slate-500 truncate max-w-[160px] sm:max-w-xs">{payable.description}</p>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="font-mono text-xs font-bold text-[#7B001C] tabular-nums">
-                        {formatCurrency(payable.balanceDue, business.currencySymbol)}
-                      </span>
-                      <button
-                        onClick={() => onOpenPaySupplier(payable)}
-                        className="px-2.5 py-1 text-[11px] font-semibold text-[#7B001C] bg-rose-50 hover:bg-rose-100 rounded-lg border border-rose-200 transition-colors cursor-pointer"
-                      >
-                        Settle
-                      </button>
-                    </div>
-                  </div>
-                ))
+                <span className="font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                  Healthy
+                </span>
               )}
             </div>
           </div>
-
-          {/* Low Stock Warning (if any) */}
-          {lowStockItems.length > 0 && (
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 flex items-start gap-3">
-              <Package className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
-              <div className="flex-1">
-                <h4 className="text-xs font-bold text-amber-900">Low Stock Alert</h4>
-                <p className="text-[11px] text-amber-700 mt-0.5">
-                  {lowStockItems.map(p => `${p.name} (${p.currentStock} left)`).join(' · ')}
-                </p>
-              </div>
-              <button
-                onClick={() => setActiveTab('products')}
-                className="text-xs font-semibold text-amber-900 hover:underline shrink-0"
-              >
-                Restock →
-              </button>
-            </div>
-          )}
         </div>
       </div>
 
-      {/* RECENT ACTIVITY LEDGER PREVIEW */}
-      <div className="bg-white rounded-xl border border-slate-200 p-4">
-        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-          <div>
-            <h3 className="text-sm font-semibold text-slate-900">Recent Transactions</h3>
-            <p className="text-xs text-slate-500">Latest recorded sales, enrollments, and expenses</p>
+      {/* 3. WHAT NEEDS YOUR ATTENTION? (Direct action cards) */}
+      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-2xs space-y-3.5 transition-colors">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-[#4C0196] dark:text-purple-400" />
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+              What Needs Your Attention
+            </h3>
           </div>
-          <button
-            onClick={() => setActiveTab('ledger')}
-            className="text-xs font-semibold text-[#4C0196] hover:underline"
-          >
-            View Complete Ledger →
-          </button>
+          <span className="text-xs text-slate-400 font-medium">
+            Action items for today
+          </span>
         </div>
 
-        <div className="divide-y divide-slate-100">
-          {recentActivities.map(item => {
-            const isSale = item.type === 'sale';
-            return (
-              <div
-                key={item.id}
-                className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:bg-slate-50/50 rounded-lg px-2 transition-colors"
-              >
-                <div className="flex items-center gap-3">
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
-                    isSale ? 'bg-purple-50 text-[#4C0196]' : 'bg-rose-50 text-[#7B001C]'
-                  }`}>
-                    {isSale ? <ArrowDownLeft className="w-4 h-4" /> : <ArrowUpRight className="w-4 h-4" />}
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-semibold text-slate-900">{item.title}</h4>
-                    <div className="flex items-center gap-2 text-[11px] text-slate-500">
-                      <span>{formatDate(item.date)}</span>
-                      <span>·</span>
-                      <span>{item.time}</span>
-                      <span>·</span>
-                      <span className="capitalize">{item.method}</span>
-                      {isSale && (item.raw as Sale).balanceDue > 0 && (
-                        <>
-                          <span>·</span>
-                          <span className="text-[#7B001C] font-semibold">
-                            Balance: {formatCurrency((item.raw as Sale).balanceDue, business.currencySymbol)}
-                          </span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between sm:justify-end gap-3 pl-11 sm:pl-0">
-                  <span className={`font-mono text-xs font-bold tabular-nums ${isSale ? 'text-slate-900' : 'text-[#7B001C]'}`}>
-                    {isSale ? '+' : '-'}{formatCurrency(item.amount, business.currencySymbol)}
+        {!hasAttentionItems ? (
+          <div className="p-4 bg-emerald-50/60 dark:bg-emerald-950/30 rounded-xl border border-emerald-100 dark:border-emerald-900/50 flex items-center gap-3">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            <div>
+              <p className="text-xs font-bold text-emerald-900 dark:text-emerald-200">
+                All clear! No overdue customer debts or low-stock alerts.
+              </p>
+              <p className="text-[11px] text-emerald-700 dark:text-emerald-400 mt-0.5">
+                Your business is operating smoothly. Keep recording sales and tracking items.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {/* Attention Item A: Uncollected Customer Debt */}
+            {topDebtors.length > 0 && (
+              <div className="p-3.5 rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50/40 dark:bg-amber-950/20 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                    <Users className="w-3.5 h-3.5 text-amber-600" />
+                    Uncollected Debts ({topDebtors.length})
                   </span>
-                  {isSale && (
-                    <button
-                      onClick={() => onViewSaleReceipt(item.raw as Sale)}
-                      className="p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
-                      title="View Invoice Receipt"
+                  <button
+                    onClick={() => setActiveTab('customers')}
+                    className="text-[11px] font-semibold text-[#4C0196] dark:text-purple-400 hover:underline"
+                  >
+                    View All →
+                  </button>
+                </div>
+                <div className="space-y-1.5">
+                  {topDebtors.map(debtor => (
+                    <div
+                      key={debtor.id}
+                      className="flex items-center justify-between text-xs bg-white dark:bg-slate-900 p-2 rounded-lg border border-amber-100 dark:border-amber-900/40"
                     >
-                      <Eye className="w-3.5 h-3.5" />
-                    </button>
-                  )}
+                      <div>
+                        <div className="font-semibold text-slate-900 dark:text-white truncate max-w-[130px]">
+                          {debtor.name}
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          {debtor.phone || 'No phone'}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-amber-700 dark:text-amber-400 text-xs">
+                          {formatCurrency(debtor.outstandingDebt, business.currencySymbol)}
+                        </span>
+                        <button
+                          onClick={() => onOpenCollectDebt(debtor)}
+                          className="px-2 py-0.5 text-[10px] font-bold text-white bg-[#4C0196] hover:bg-[#3b0075] rounded-md transition-colors cursor-pointer"
+                        >
+                          Collect
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
-            );
-          })}
+            )}
+
+            {/* Attention Item B: Low Stock Warning */}
+            {lowStockItems.length > 0 && (
+              <div className="p-3.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/40 dark:bg-rose-950/20 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-rose-900 dark:text-rose-200 flex items-center gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+                    Low Stock Alert ({lowStockItems.length})
+                  </span>
+                  <button
+                    onClick={() => setActiveTab('products')}
+                    className="text-[11px] font-semibold text-[#4C0196] dark:text-purple-400 hover:underline"
+                  >
+                    Restock →
+                  </button>
+                </div>
+                <div className="space-y-1.5">
+                  {lowStockItems.slice(0, 3).map(item => (
+                    <div
+                      key={item.id}
+                      className="flex items-center justify-between text-xs bg-white dark:bg-slate-900 p-2 rounded-lg border border-rose-100 dark:border-rose-900/40"
+                    >
+                      <div className="truncate max-w-[140px]">
+                        <div className="font-semibold text-slate-900 dark:text-white truncate">
+                          {item.name}
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          Min required: {item.minStockLevel || 5} units
+                        </div>
+                      </div>
+                      <span className="font-mono font-bold text-rose-600 dark:text-rose-400 text-xs bg-rose-50 dark:bg-rose-950/60 px-2 py-0.5 rounded">
+                        {item.currentStock ?? item.openingStock ?? 0} left
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Attention Item C: Upcoming Supplier Debts */}
+            {topPayables.length > 0 && (
+              <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                    <AlertCircle className="w-3.5 h-3.5 text-[#7B001C]" />
+                    Supplier Payables ({topPayables.length})
+                  </span>
+                  <button
+                    onClick={() => onOpenPaySupplier(topPayables[0])}
+                    className="text-[11px] font-semibold text-[#7B001C] dark:text-rose-400 hover:underline"
+                  >
+                    Settle Bills →
+                  </button>
+                </div>
+                <div className="space-y-1.5">
+                  {topPayables.map(payable => (
+                    <div
+                      key={payable.id}
+                      className="flex items-center justify-between text-xs bg-white dark:bg-slate-900 p-2 rounded-lg border border-slate-200 dark:border-slate-800"
+                    >
+                      <div className="truncate max-w-[140px]">
+                        <div className="font-semibold text-slate-900 dark:text-white truncate">
+                          {payable.vendorName}
+                        </div>
+                        <div className="text-[10px] text-slate-400 truncate">
+                          {payable.description}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-[#7B001C] dark:text-rose-400 text-xs">
+                          {formatCurrency(payable.balanceDue, business.currencySymbol)}
+                        </span>
+                        <button
+                          onClick={() => onOpenPaySupplier(payable)}
+                          className="px-2 py-0.5 text-[10px] font-bold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 rounded border border-slate-300 dark:border-slate-700"
+                        >
+                          Pay
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* 4. RECENT TRANSACTIONS & SALES (What is happening in your business) */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Left Column (2 spans): Recent Sales Feed */}
+        <div className="lg:col-span-2 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-2xs space-y-3 transition-colors">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                Recent Sales &amp; Invoices
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Latest customer purchases and issued receipts
+              </p>
+            </div>
+            <button
+              onClick={() => setActiveTab('sales')}
+              className="text-xs font-semibold text-[#4C0196] dark:text-purple-400 hover:underline flex items-center gap-1"
+            >
+              <span>View All Sales ({sales.length})</span>
+              <ArrowRight className="w-3 h-3" />
+            </button>
+          </div>
+
+          {recentSales.length === 0 ? (
+            /* Empty State for MVP */
+            <div className="py-10 px-4 text-center space-y-3">
+              <div className="w-12 h-12 bg-purple-50 dark:bg-purple-950/60 text-[#4C0196] dark:text-purple-300 rounded-2xl flex items-center justify-center mx-auto">
+                <Receipt className="w-6 h-6" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                  No sales recorded yet
+                </p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
+                  Record your first customer sale to start tracking daily revenue, profits, and issuing receipts.
+                </p>
+              </div>
+              <button
+                onClick={onOpenRecordSale}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-[#4C0196] hover:bg-[#3b0075] text-white text-xs font-bold rounded-xl transition-all cursor-pointer shadow-xs"
+              >
+                <Plus className="w-4 h-4" />
+                <span>+ Record First Sale</span>
+              </button>
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-100 dark:divide-slate-800">
+              {recentSales.map(sale => (
+                <div
+                  key={sale.id}
+                  className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 rounded-xl px-2 transition-colors"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-purple-50 dark:bg-purple-950/60 text-[#4C0196] dark:text-purple-300 flex items-center justify-center shrink-0">
+                      <Receipt className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-xs text-slate-900 dark:text-white">
+                          {sale.customerName}
+                        </span>
+                        <span className="font-mono text-[10px] text-[#4C0196] dark:text-purple-400 font-bold bg-purple-50 dark:bg-purple-950/60 px-1.5 py-0.2 rounded">
+                          #{sale.invoiceNumber}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        <span>{formatDate(sale.date)}</span>
+                        <span>·</span>
+                        <span className="truncate max-w-[150px] sm:max-w-xs">
+                          {sale.items.map(i => i.productName).join(', ')}
+                        </span>
+                        {sale.balanceDue > 0 && (
+                          <>
+                            <span>·</span>
+                            <span className="text-[#7B001C] dark:text-rose-400 font-bold">
+                              Owes: {formatCurrency(sale.balanceDue, business.currencySymbol)}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between sm:justify-end gap-3 pl-11 sm:pl-0">
+                    <div className="text-right">
+                      <div className="font-mono text-xs font-bold text-slate-900 dark:text-white tabular-nums">
+                        {formatCurrency(sale.totalAmount, business.currencySymbol)}
+                      </div>
+                      <div className="text-[10px] text-slate-400 capitalize">
+                        {sale.paymentMethod}
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => onViewSaleReceipt(sale)}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                      title="View & Print Receipt"
+                    >
+                      <Eye className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Right Column (1 span): Clean 7-Day Performance Trend */}
+        <div className="lg:col-span-1 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-2xs space-y-3 transition-colors flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                7-Day Cash Trend
+              </h3>
+              <span className="text-[11px] text-slate-400">Inflow vs. Outflow</span>
+            </div>
+            <div className="pt-2">
+              <SalesExpenseTrendChart
+                data={trendData}
+                currencySymbol={business.currencySymbol}
+                hideProfit={!canViewProfit}
+              />
+            </div>
+          </div>
+
+          <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 text-xs space-y-1 mt-4">
+            <div className="font-bold text-slate-800 dark:text-slate-200">
+              Quick Tip for Smartcore:
+            </div>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Record sales immediately when cash or transfer is received to keep customer debt records and inventory automatically synchronized.
+            </p>
+          </div>
         </div>
       </div>
     </div>

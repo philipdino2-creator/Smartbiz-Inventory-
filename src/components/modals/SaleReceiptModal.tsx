@@ -163,9 +163,11 @@ export const SaleReceiptModal: React.FC<SaleReceiptModalProps> = ({
                   <div className="font-bold text-xs tracking-tight uppercase">
                     {business.name || 'SMARTCORE ICT CENTRE'}
                   </div>
-                  <div className="text-[9px] font-bold text-slate-800">
-                    {business.tagline || 'Learn. Create. Innovate.'}
-                  </div>
+                  {business.tagline && (
+                    <div className="text-[9px] font-bold text-slate-800">
+                      {business.tagline}
+                    </div>
+                  )}
                   <div className="text-[8.5px] leading-tight text-slate-700 mt-1">
                     {business.address}
                   </div>
@@ -284,7 +286,7 @@ export const SaleReceiptModal: React.FC<SaleReceiptModalProps> = ({
                 {/* Footer */}
                 <div className="text-center text-[8.5px] space-y-0.5 text-slate-800">
                   <div className="font-semibold">Thank you for your patronage.</div>
-                  <div className="font-bold tracking-wider">{business.tagline || 'Learn. Create. Innovate.'}</div>
+                  {business.tagline && <div className="font-bold tracking-wider">{business.tagline}</div>}
                   <div className="text-[7.5px] text-slate-500 pt-0.5">*** POS Receipt · Powered by BizFlow ***</div>
                 </div>
               </div>
@@ -305,9 +307,11 @@ export const SaleReceiptModal: React.FC<SaleReceiptModalProps> = ({
                   <div className="font-bold text-sm tracking-tight uppercase">
                     {business.name || 'SMARTCORE ICT CENTRE'}
                   </div>
-                  <div className="text-[11px] font-bold text-slate-800">
-                    {business.tagline || 'Learn. Create. Innovate.'}
-                  </div>
+                  {business.tagline && (
+                    <div className="text-[11px] font-bold text-slate-800">
+                      {business.tagline}
+                    </div>
+                  )}
                   <div className="text-[10px] leading-relaxed text-slate-700 mt-1 max-w-[280px] mx-auto">
                     {business.address}
                   </div>
@@ -433,7 +437,7 @@ export const SaleReceiptModal: React.FC<SaleReceiptModalProps> = ({
                 {/* Footer Sign-off */}
                 <div className="text-center text-[10px] space-y-1 text-slate-800">
                   <div className="font-semibold">Thank you for your patronage.</div>
-                  <div className="font-bold tracking-wider">{business.tagline || 'Learn. Create. Innovate.'}</div>
+                  {business.tagline && <div className="font-bold tracking-wider">{business.tagline}</div>}
                   <div className="text-[9px] text-slate-500 pt-0.5">*** Official POS Receipt · Powered by BizFlow ***</div>
                 </div>
               </div>

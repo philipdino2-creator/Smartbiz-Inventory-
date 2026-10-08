@@ -34,6 +34,15 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
   const [filterMode, setFilterMode] = useState<'all' | 'debtors'>('debtors');
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [isAddingCustomer, setIsAddingCustomer] = useState(false);
+  const [custToDelete, setCustToDelete] = useState<Customer | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => {
+      setToastMessage(prev => (prev === msg ? null : prev));
+    }, 3500);
+  };
 
   // New Customer Form State
   const [newName, setNewName] = useState('');
@@ -81,24 +90,20 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
     setNewAddress('');
     setNewNotes('');
     setIsAddingCustomer(false);
+    showToast(`Added customer profile for "${newName.trim()}".`);
   };
 
-  const handleDelete = (cust: Customer) => {
+  const confirmDeleteCustomer = () => {
+    if (!custToDelete) return;
     if (currentUser.role === 'staff') {
-      alert('Permission Denied: Staff members cannot delete customer profiles.');
+      showToast('Permission Denied: Staff members cannot delete customer profiles.');
+      setCustToDelete(null);
       return;
     }
-    if (cust.outstandingDebt > 0) {
-      if (!window.confirm(`Warning: ${cust.name} currently owes ${formatCurrency(cust.outstandingDebt, business.currencySymbol)}. Are you sure you want to delete this customer record?`)) {
-        return;
-      }
-    } else {
-      if (!window.confirm(`Delete customer profile for ${cust.name}?`)) {
-        return;
-      }
-    }
-    deleteCustomer(cust.id);
-    if (selectedCustomer?.id === cust.id) setSelectedCustomer(null);
+    deleteCustomer(custToDelete.id);
+    if (selectedCustomer?.id === custToDelete.id) setSelectedCustomer(null);
+    showToast(`Deleted customer profile for "${custToDelete.name}".`);
+    setCustToDelete(null);
   };
 
   // WhatsApp reminder message generator
@@ -298,120 +303,201 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
       {/* Customers List Grid / Table */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
         {filteredCustomers.length === 0 ? (
-          <div className="p-8 text-center">
-            <Users className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-            <p className="text-sm font-semibold text-slate-700">
-              {filterMode === 'debtors' ? 'No outstanding customer debts!' : 'No customer records found'}
-            </p>
-            <p className="text-xs text-slate-400 mt-1">
-              {filterMode === 'debtors'
-                ? 'All enrolled students and clients have settled their invoices.'
-                : 'Add a new customer to keep track of purchases.'}
-            </p>
+          <div className="p-10 text-center space-y-3">
+            <div className="w-12 h-12 bg-purple-50 text-[#4C0196] rounded-2xl flex items-center justify-center mx-auto">
+              <Users className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-sm font-bold text-slate-800">
+                {filterMode === 'debtors' ? 'No outstanding customer debts!' : 'No customer records found'}
+              </p>
+              <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
+                {filterMode === 'debtors'
+                  ? 'All students and clients have settled their invoices.'
+                  : 'Add a customer or record a sale to start tracking client debt & history.'}
+              </p>
+            </div>
+            <button
+              onClick={() => setIsAddingCustomer(true)}
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#4C0196] hover:bg-[#3b0075] text-white text-xs font-bold rounded-xl transition-all cursor-pointer shadow-xs"
+            >
+              <Plus className="w-4 h-4" />
+              <span>+ Add Customer</span>
+            </button>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead>
-                <tr className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold">
-                  <th className="py-3 px-4">Customer Name</th>
-                  <th className="py-3 px-4">Phone Number</th>
-                  <th className="py-3 px-4 text-right">Total Purchases</th>
-                  <th className="py-3 px-4 text-right">Total Paid</th>
-                  <th className="py-3 px-4 text-right">Debt Balance</th>
-                  <th className="py-3 px-4 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredCustomers.map(cust => {
-                  const hasDebt = cust.outstandingDebt > 0;
-                  const waUrl = getWhatsAppReminderUrl(cust);
-                  return (
-                    <tr
-                      key={cust.id}
-                      className="hover:bg-slate-50/80 transition-colors cursor-pointer"
-                      onClick={() => setSelectedCustomer(cust)}
-                    >
-                      <td className="py-3 px-4">
-                        <div className="font-semibold text-slate-900">{cust.name}</div>
-                        {cust.notes && (
-                          <div className="text-[10px] text-slate-400 truncate max-w-xs">{cust.notes}</div>
-                        )}
-                      </td>
+          <>
+            {/* MOBILE CARD VIEW (block sm:hidden) */}
+            <div className="block sm:hidden divide-y divide-slate-100">
+              {filteredCustomers.map(cust => {
+                const hasDebt = cust.outstandingDebt > 0;
+                return (
+                  <div key={cust.id} className="p-4 space-y-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="font-bold text-slate-900 text-sm">{cust.name}</div>
+                        <div className="text-[11px] text-slate-500 mt-0.5">
+                          {cust.phone || 'No phone'} {cust.email ? `· ${cust.email}` : ''}
+                        </div>
+                      </div>
 
-                      <td className="py-3 px-4 text-slate-600">
-                        {cust.phone || <span className="text-slate-400 italic">None</span>}
-                      </td>
-
-                      <td className="py-3 px-4 text-right font-mono text-slate-700 tabular-nums">
-                        {formatCurrency(cust.totalPurchases, business.currencySymbol)}
-                      </td>
-
-                      <td className="py-3 px-4 text-right font-mono text-emerald-700 font-medium tabular-nums">
-                        {formatCurrency(cust.totalPaid, business.currencySymbol)}
-                      </td>
-
-                      <td className="py-3 px-4 text-right font-mono font-bold tabular-nums">
-                        <span className={hasDebt ? 'text-[#7B001C]' : 'text-slate-400'}>
-                          {formatCurrency(cust.outstandingDebt, business.currencySymbol)}
+                      {hasDebt ? (
+                        <span className="font-mono font-bold text-[#7B001C] text-xs bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                          Owes: {formatCurrency(cust.outstandingDebt, business.currencySymbol)}
                         </span>
-                      </td>
+                      ) : (
+                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                          CLEAR
+                        </span>
+                      )}
+                    </div>
 
-                      <td className="py-3 px-4 text-right" onClick={e => e.stopPropagation()}>
-                        <div className="flex items-center justify-end gap-1.5">
-                          {hasDebt && (
-                            <>
-                              <button
-                                onClick={() => onOpenCollectDebt(cust)}
-                                className="flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-white bg-[#4C0196] hover:bg-[#3b0075] rounded-md transition-colors cursor-pointer shadow-2xs"
-                                title="Collect Debt Payment"
-                              >
-                                <CreditCard className="w-3.5 h-3.5" />
-                                <span>Collect</span>
-                              </button>
+                    <div className="flex items-center justify-between text-xs bg-slate-50 p-2 rounded-lg text-slate-600">
+                      <span>Purchases: {formatCurrency(cust.totalPurchases, business.currencySymbol)}</span>
+                      <span>Paid: {formatCurrency(cust.totalPaid, business.currencySymbol)}</span>
+                    </div>
 
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (onOpenWhatsAppReminder) {
-                                    onOpenWhatsAppReminder(cust);
-                                  } else if (waUrl) {
-                                    window.open(waUrl, '_blank', 'noopener,noreferrer');
-                                  }
-                                }}
-                                className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-md transition-colors cursor-pointer"
-                                title="Send Polite WhatsApp Debt Reminder"
-                              >
-                                <MessageSquare className="w-4 h-4" />
-                              </button>
-                            </>
-                          )}
-
+                    <div className="flex items-center justify-end gap-2 pt-1">
+                      {hasDebt && (
+                        <>
                           <button
-                            onClick={() => setSelectedCustomer(cust)}
-                            className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-md transition-colors"
-                            title="View Profile & Sales History"
+                            onClick={() => onOpenCollectDebt(cust)}
+                            className="px-2.5 py-1 text-xs font-bold text-white bg-[#4C0196] hover:bg-[#3b0075] rounded-lg transition-colors cursor-pointer"
                           >
-                            <History className="w-4 h-4" />
+                            Collect Debt
                           </button>
-
-                          {currentUser.role !== 'staff' && (
+                          {onOpenWhatsAppReminder && (
                             <button
-                              onClick={() => handleDelete(cust)}
-                              className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
-                              title="Delete Customer"
+                              onClick={() => onOpenWhatsAppReminder(cust)}
+                              className="px-2.5 py-1 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors cursor-pointer flex items-center gap-1"
                             >
-                              <Trash2 className="w-4 h-4" />
+                              <MessageSquare className="w-3 h-3" />
+                              <span>WhatsApp</span>
                             </button>
                           )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                        </>
+                      )}
+
+                      <button
+                        onClick={() => setSelectedCustomer(cust)}
+                        className="px-2.5 py-1 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+                      >
+                        History
+                      </button>
+
+                      {currentUser.role !== 'staff' && (
+                        <button
+                          onClick={() => setCustToDelete(cust)}
+                          className="p-1 text-slate-400 hover:text-rose-600 rounded"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* DESKTOP TABLE VIEW (hidden sm:block) */}
+            <div className="hidden sm:block overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold">
+                    <th className="py-3 px-4">Customer Name</th>
+                    <th className="py-3 px-4">Phone Number</th>
+                    <th className="py-3 px-4 text-right">Total Purchases</th>
+                    <th className="py-3 px-4 text-right">Total Paid</th>
+                    <th className="py-3 px-4 text-right">Debt Balance</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredCustomers.map(cust => {
+                    const hasDebt = cust.outstandingDebt > 0;
+                    return (
+                      <tr
+                        key={cust.id}
+                        className="hover:bg-slate-50/80 transition-colors cursor-pointer"
+                        onClick={() => setSelectedCustomer(cust)}
+                      >
+                        <td className="py-3 px-4">
+                          <div className="font-semibold text-slate-900">{cust.name}</div>
+                          {cust.notes && (
+                            <div className="text-[10px] text-slate-400 truncate max-w-xs">{cust.notes}</div>
+                          )}
+                        </td>
+
+                        <td className="py-3 px-4 text-slate-600">
+                          {cust.phone || <span className="text-slate-400 italic">None</span>}
+                        </td>
+
+                        <td className="py-3 px-4 text-right font-mono text-slate-700 tabular-nums">
+                          {formatCurrency(cust.totalPurchases, business.currencySymbol)}
+                        </td>
+
+                        <td className="py-3 px-4 text-right font-mono text-emerald-700 font-medium tabular-nums">
+                          {formatCurrency(cust.totalPaid, business.currencySymbol)}
+                        </td>
+
+                        <td className="py-3 px-4 text-right font-mono font-bold tabular-nums">
+                          <span className={hasDebt ? 'text-[#7B001C]' : 'text-slate-400'}>
+                            {formatCurrency(cust.outstandingDebt, business.currencySymbol)}
+                          </span>
+                        </td>
+
+                        <td className="py-3 px-4 text-right" onClick={e => e.stopPropagation()}>
+                          <div className="flex items-center justify-end gap-1.5">
+                            {hasDebt && (
+                              <>
+                                <button
+                                  onClick={() => onOpenCollectDebt(cust)}
+                                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-white bg-[#4C0196] hover:bg-[#3b0075] rounded-md transition-colors cursor-pointer shadow-2xs"
+                                  title="Collect Debt Payment"
+                                >
+                                  <CreditCard className="w-3.5 h-3.5" />
+                                  <span>Collect</span>
+                                </button>
+
+                                {onOpenWhatsAppReminder && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onOpenWhatsAppReminder(cust)}
+                                    className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-md transition-colors cursor-pointer"
+                                    title="Send Polite WhatsApp Debt Reminder"
+                                  >
+                                    <MessageSquare className="w-4 h-4" />
+                                  </button>
+                                )}
+                              </>
+                            )}
+
+                            <button
+                              onClick={() => setSelectedCustomer(cust)}
+                              className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-md transition-colors"
+                              title="View Profile & Sales History"
+                            >
+                              <History className="w-4 h-4" />
+                            </button>
+
+                            {currentUser.role !== 'staff' && (
+                              <button
+                                onClick={() => setCustToDelete(cust)}
+                                className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors cursor-pointer"
+                                title="Delete Customer"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
 
@@ -620,6 +706,42 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal (Replaces window.confirm) */}
+      {custToDelete && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="w-10 h-10 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+              <Trash2 className="w-5 h-5" />
+            </div>
+            <div className="text-center space-y-1">
+              <h3 className="font-bold text-base text-slate-900">Delete Customer?</h3>
+              <p className="text-xs text-slate-500">
+                Are you sure you want to delete profile for <strong>"{custToDelete.name}"</strong>?
+                {custToDelete.outstandingDebt > 0 && (
+                  <span className="block text-rose-600 font-semibold mt-1">
+                    Warning: This customer currently owes {formatCurrency(custToDelete.outstandingDebt, business.currencySymbol)}.
+                  </span>
+                )}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                onClick={() => setCustToDelete(null)}
+                className="flex-1 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDeleteCustomer}
+                className="flex-1 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs transition-colors cursor-pointer"
+              >
+                Delete Profile
+              </button>
+            </div>
           </div>
         </div>
       )}

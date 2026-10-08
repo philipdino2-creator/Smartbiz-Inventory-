@@ -1,6 +1,6 @@
 import React from 'react';
 import { useBusiness } from '../../context/BusinessContext';
-import { PlusCircle, MinusCircle, UserCheck, Search, LogIn } from 'lucide-react';
+import { PlusCircle, MinusCircle, UserCheck, Search, LogIn, LogOut } from 'lucide-react';
 import { BizFlowLogo } from '../common/BizFlowLogo';
 import { ThemeToggle } from '../common/ThemeToggle';
 
@@ -21,21 +21,24 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenSearch,
   onOpenLogin,
 }) => {
-  const { business, currentUser, setCurrentUser, users } = useBusiness();
+  const { business, currentUser, setCurrentUser, users, logout } = useBusiness();
 
   const navLinks = [
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'sales', label: 'Sales' },
+    { id: 'products', label: 'Products' },
     { id: 'expenses', label: 'Expenses' },
-    { id: 'reconciliation', label: 'Reconciliation' },
-    { id: 'recurring', label: 'Recurring' },
-    { id: 'customers', label: 'Debtors' },
-    { id: 'payables', label: 'Payables' },
-    { id: 'products', label: 'Items & Services' },
-    { id: 'ledger', label: 'Ledger' },
+    { id: 'customers', label: 'Customers' },
     { id: 'reports', label: 'Reports' },
     { id: 'settings', label: 'Settings' },
   ];
+
+  const isLinkActive = (id: string) => {
+    if (activeTab === id) return true;
+    if (id === 'expenses' && ['recurring', 'payables', 'reconciliation'].includes(activeTab)) return true;
+    if (id === 'reports' && activeTab === 'ledger') return true;
+    return false;
+  };
 
   return (
     <header className="sticky top-0 z-40 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 shadow-xs transition-colors duration-200">
@@ -82,7 +85,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         {/* Zone 2: Navigation links */}
         <nav className="hidden lg:flex items-center gap-1 xl:gap-2">
           {navLinks.map(link => {
-            const isActive = activeTab === link.id;
+            const isActive = isLinkActive(link.id);
             return (
               <button
                 key={link.id}
@@ -139,7 +142,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* User Role Switcher Dropdown & Login Trigger */}
           <div className="relative ml-1 pl-2 border-l border-slate-200 dark:border-slate-800 flex items-center gap-1.5">
-            <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-xs">
+            <div className="hidden sm:flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-xs">
               <UserCheck className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400" />
               <select
                 value={currentUser.id}
@@ -162,12 +165,21 @@ export const Navbar: React.FC<NavbarProps> = ({
               <button
                 onClick={onOpenLogin}
                 className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-[#4C0196] dark:text-purple-300 bg-purple-50 dark:bg-purple-950/60 hover:bg-purple-100 dark:hover:bg-purple-900 border border-purple-200 dark:border-purple-800 transition-colors cursor-pointer"
-                title="Sign in, create database account, or sign in with Google"
+                title="Switch account, register, or sign in"
               >
                 <LogIn className="w-3.5 h-3.5" />
-                <span className="hidden md:inline">Sign In / Up</span>
+                <span className="hidden lg:inline">Switch</span>
               </button>
             )}
+
+            <button
+              onClick={() => logout()}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-100 dark:hover:bg-rose-900 border border-rose-200 dark:border-rose-800 transition-colors cursor-pointer"
+              title="Sign out and lock workspace"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span className="hidden md:inline">Sign Out</span>
+            </button>
           </div>
         </div>
       </div>

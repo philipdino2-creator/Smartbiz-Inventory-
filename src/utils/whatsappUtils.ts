@@ -106,7 +106,7 @@ export function generateWhatsAppReminderMessage(options: WhatsAppReminderOptions
     dueDate,
     tone = 'friendly',
     businessName,
-    businessTagline = 'Learn. Create. Innovate.',
+    businessTagline = '',
     businessPhone,
     bankDetails,
   } = options;
@@ -163,7 +163,7 @@ Account Name: ${bankDetails.accountName || businessName}
 Account Number: ${bankDetails.accountNumber}${bankDetails.paymentInstructions ? `\nInstructions: ${bankDetails.paymentInstructions}` : ''}`;
   }
 
-  const closing = `\n\nThank you for your patronage.\n\n${businessName}\n${businessTagline}${businessPhone ? `\nPhone: ${businessPhone}` : ''}`;
+  const closing = `\n\nThank you for your patronage.\n\n${businessName}${businessTagline ? `\n${businessTagline}` : ''}${businessPhone ? `\nPhone: ${businessPhone}` : ''}`;
 
   return `${body}${bankSection}${closing}`;
 }

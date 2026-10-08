@@ -8,7 +8,9 @@ import {
   Printer,
   CheckCircle,
   AlertTriangle,
+  BookOpen,
 } from 'lucide-react';
+import { LedgerView } from '../ledger/LedgerView';
 
 export const ReportsView: React.FC = () => {
   const { business, sales, expenses, customers, payables, currentUser, hasPermission } = useBusiness();
@@ -17,7 +19,7 @@ export const ReportsView: React.FC = () => {
   const canViewProfit = hasPermission('view_profit');
   const canExport = hasPermission('export_financial_data');
 
-  const [reportType, setReportType] = useState<'pnl' | 'sales' | 'expenses' | 'debtors' | 'payables'>('pnl');
+  const [reportType, setReportType] = useState<'pnl' | 'sales' | 'expenses' | 'debtors' | 'payables' | 'ledger'>('pnl');
   const [dateRange, setDateRange] = useState<'this_month' | 'all_time'>('this_month');
 
   // Filter datasets by date range
@@ -475,6 +477,15 @@ export const ReportsView: React.FC = () => {
           >
             Supplier Payables
           </button>
+          <button
+            onClick={() => setReportType('ledger')}
+            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer flex items-center gap-1.5 ${
+              reportType === 'ledger' ? 'bg-white text-slate-900 shadow-2xs font-semibold' : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <BookOpen className="w-3.5 h-3.5" />
+            <span>Cash Ledger</span>
+          </button>
         </div>
 
         {/* Date Scope */}
@@ -680,6 +691,11 @@ export const ReportsView: React.FC = () => {
             </table>
           </div>
         </div>
+      )}
+
+      {/* 6. COMPLETE CASH LEDGER (PROGRESSIVE DISCLOSURE) */}
+      {reportType === 'ledger' && (
+        <LedgerView />
       )}
     </div>
   );

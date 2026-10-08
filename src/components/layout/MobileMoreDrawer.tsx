@@ -9,6 +9,7 @@ import {
   Shield,
   RotateCcw,
   CalendarClock,
+  LogOut,
 } from 'lucide-react';
 import { useBusiness } from '../../context/BusinessContext';
 import { BizFlowLogo } from '../common/BizFlowLogo';
@@ -29,11 +30,23 @@ export const MobileMoreDrawer: React.FC<MobileMoreDrawerProps> = ({
   setActiveTab,
   onOpenLogin,
 }) => {
-  const { business, currentUser, resetToDemoData } = useBusiness();
+  const { business, currentUser, resetToDemoData, logout } = useBusiness();
 
   if (!isOpen) return null;
 
   const menuItems = [
+    {
+      id: 'customers',
+      label: 'Customers & Debtors',
+      desc: 'Customer records, debt balances, and WhatsApp collection',
+      icon: CreditCard,
+    },
+    {
+      id: 'reports',
+      label: 'Reports & P&L',
+      desc: 'Profit & loss statements, sales channels, debtor aging',
+      icon: FileText,
+    },
     {
       id: 'recurring',
       label: 'Recurring Expenses',
@@ -47,27 +60,15 @@ export const MobileMoreDrawer: React.FC<MobileMoreDrawerProps> = ({
       icon: CreditCard,
     },
     {
-      id: 'products',
-      label: 'Items & Services',
-      desc: 'Courses, tuition, physical products, inventory stock & pricing',
-      icon: Package,
-    },
-    {
       id: 'ledger',
       label: 'Complete Cash Ledger',
       desc: 'Chronological double-entry cash flow journal & audit',
       icon: BookOpen,
     },
     {
-      id: 'reports',
-      label: 'Financial Reports & P&L',
-      desc: 'Profit & loss statements, sales channels, debtor aging',
-      icon: FileText,
-    },
-    {
       id: 'settings',
       label: 'Business Settings',
-      desc: 'Company profile, currency, VAT rate, and team roles',
+      desc: 'Company profile, logo, currency, VAT rate, and team roles',
       icon: Settings,
     },
   ];
@@ -147,8 +148,8 @@ export const MobileMoreDrawer: React.FC<MobileMoreDrawerProps> = ({
         </div>
 
         {/* Account / Authentication row */}
-        {onOpenLogin && (
-          <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+        <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">
+          {onOpenLogin && (
             <button
               onClick={() => {
                 onClose();
@@ -158,12 +159,26 @@ export const MobileMoreDrawer: React.FC<MobileMoreDrawerProps> = ({
             >
               <div className="flex items-center gap-2">
                 <BizFlowLogo size="xs" iconOnly />
-                <span>Account &amp; Database Login / Google Sign In</span>
+                <span>Account &amp; Role Switcher</span>
               </div>
               <span className="text-[10px] bg-[#4C0196] text-white px-2 py-0.5 rounded font-semibold">Switch</span>
             </button>
-          </div>
-        )}
+          )}
+
+          <button
+            onClick={() => {
+              onClose();
+              logout();
+            }}
+            className="w-full flex items-center justify-between p-3 rounded-xl bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 text-xs font-bold transition-colors cursor-pointer"
+          >
+            <div className="flex items-center gap-2">
+              <LogOut className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+              <span>Sign Out &amp; Lock Workspace</span>
+            </div>
+            <span className="text-[10px] bg-rose-600 text-white px-2 py-0.5 rounded font-semibold">Log Out</span>
+          </button>
+        </div>
 
         {/* Quick Demo Reset for Mobile (Owner only) */}
         {currentUser.role === 'owner' && (

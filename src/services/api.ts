@@ -59,7 +59,22 @@ class ApiService {
     return res;
   }
 
-  async register(data: { name: string; email: string; password?: string; phone?: string; role?: UserRole }): Promise<{ token: string; user: User; business: Business }> {
+  async register(data: {
+    name: string;
+    email: string;
+    password?: string;
+    phone?: string;
+    role?: UserRole;
+    businessName?: string;
+    businessCategory?: string;
+    businessPhone?: string;
+    businessEmail?: string;
+    businessAddress?: string;
+    businessCurrency?: string;
+    businessCurrencySymbol?: string;
+    businessTaxRate?: number;
+    businessLogoUrl?: string;
+  }): Promise<{ token: string; user: User; business: Business }> {
     const res = await this.request<{ token: string; user: User; business: Business }>('/api/auth/register', {
       method: 'POST',
       body: JSON.stringify(data),
@@ -75,6 +90,20 @@ class ApiService {
     });
     this.setToken(res.token);
     return res;
+  }
+
+  async requestPasswordReset(email: string): Promise<{ success: boolean; message: string; token?: string }> {
+    return this.request<{ success: boolean; message: string; token?: string }>('/api/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+  }
+
+  async confirmPasswordReset(token: string, newPassword: string): Promise<{ success: boolean; message: string }> {
+    return this.request<{ success: boolean; message: string }>('/api/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ token, newPassword }),
+    });
   }
 
   async getMe(): Promise<{ user: User; business: Business }> {

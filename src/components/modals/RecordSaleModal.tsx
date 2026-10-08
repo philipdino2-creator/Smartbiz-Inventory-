@@ -129,30 +129,28 @@ export const RecordSaleModal: React.FC<RecordSaleModalProps> = ({ isOpen, onClos
 
   const handleDeleteCatalogProduct = (productId: string, productName: string) => {
     if (currentUser?.role === 'staff') {
-      alert('Permission Denied: Staff members cannot delete products or services from the catalog.');
+      setError('Permission Denied: Staff members cannot delete products from the catalog.');
       return;
     }
-    if (window.confirm(`Delete "${productName}" completely from your catalog? It will be permanently removed.`)) {
-      deleteProduct(productId);
-      // Update any line items currently referencing this deleted product
-      setItems(prevItems =>
-        prevItems.map(it => {
-          if (it.productId === productId) {
-            const nextProd = products.find(p => p.id !== productId);
-            return {
-              ...it,
-              productId: nextProd?.id || '',
-              productName: nextProd?.name || '',
-              type: nextProd?.type || 'service',
-              unitPrice: nextProd?.sellingPrice || 0,
-              costPrice: nextProd?.costPrice || 0,
-              total: (it.quantity || 1) * (nextProd?.sellingPrice || 0),
-            };
-          }
-          return it;
-        })
-      );
-    }
+    deleteProduct(productId);
+    // Update any line items currently referencing this deleted product
+    setItems(prevItems =>
+      prevItems.map(it => {
+        if (it.productId === productId) {
+          const nextProd = products.find(p => p.id !== productId);
+          return {
+            ...it,
+            productId: nextProd?.id || '',
+            productName: nextProd?.name || '',
+            type: nextProd?.type || 'service',
+            unitPrice: nextProd?.sellingPrice || 0,
+            costPrice: nextProd?.costPrice || 0,
+            total: (it.quantity || 1) * (nextProd?.sellingPrice || 0),
+          };
+        }
+        return it;
+      })
+    );
   };
 
   // Add line item
@@ -261,13 +259,6 @@ export const RecordSaleModal: React.FC<RecordSaleModalProps> = ({ isOpen, onClos
     }
 
     const finalCustomerName = customerName.trim() || 'Walk-in Customer';
-
-    // If there is an outstanding debt, a customer name or phone is recommended for tracking
-    if (totals.balanceDue > 0 && finalCustomerName === 'Walk-in Customer') {
-      if (!window.confirm('This sale has an unpaid balance of ' + formatCurrency(totals.balanceDue, business.currencySymbol) + '. Are you sure you want to record it under "Walk-in Customer"? (Adding their name helps track who owes money)')) {
-        return;
-      }
-    }
 
     try {
       const createdSale = addSale({

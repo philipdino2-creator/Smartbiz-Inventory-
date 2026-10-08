@@ -26,9 +26,10 @@ import { Sale, Customer, Payable } from './types';
 import { Plus, Check } from 'lucide-react';
 import { SplashScreen } from './components/common/SplashScreen';
 import { LoginModal } from './components/auth/LoginModal';
+import { AuthScreen } from './components/auth/AuthScreen';
 
 const AppContent: React.FC = () => {
-  const { business, customers } = useBusiness();
+  const { business, customers, isAuthenticated, isAuthChecking } = useBusiness();
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [showSplash, setShowSplash] = useState(true);
   const [isLoginOpen, setIsLoginOpen] = useState(false);
@@ -154,11 +155,18 @@ const AppContent: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  // During initial auth session verification or startup splash, show clean splash screen
+  if (isAuthChecking || showSplash) {
+    return <SplashScreen businessName={business?.name || 'Smartcore ICT Centre'} />;
+  }
+
+  // When unauthenticated, show the AuthScreen. Dashboard and workspace are completely blocked!
+  if (!isAuthenticated) {
+    return <AuthScreen />;
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col text-slate-900 dark:text-slate-100 selection:bg-purple-100 dark:selection:bg-purple-900 selection:text-purple-900 dark:selection:text-purple-100 transition-colors duration-200">
-      {/* Splash Screen on Initial Load */}
-      {showSplash && <SplashScreen businessName={business.name || 'Smartcore ICT Centre'} />}
-
       {/* Top Bar Contract compliant Navbar */}
       <Navbar
         activeTab={activeTab}
@@ -175,6 +183,7 @@ const AppContent: React.FC = () => {
           <DashboardView
             onOpenRecordSale={() => setIsRecordSaleOpen(true)}
             onOpenRecordExpense={() => setIsRecordExpenseOpen(true)}
+            onOpenAddProduct={() => setActiveTab('products')}
             onViewSaleReceipt={handleViewReceipt}
             onOpenCollectDebt={handleOpenCollectDebt}
             onOpenPaySupplier={handleOpenPaySupplier}
@@ -195,11 +204,32 @@ const AppContent: React.FC = () => {
           <ExpensesView
             onOpenRecordExpense={() => setIsRecordExpenseOpen(true)}
             onNavigateToRecurring={() => setActiveTab('recurring')}
+            onOpenPaySupplier={handleOpenPaySupplier}
           />
         )}
 
         {activeTab === 'recurring' && (
-          <RecurringExpensesView onSuccessToast={showToast} />
+          <ExpensesView
+            initialSubTab="recurring"
+            onOpenRecordExpense={() => setIsRecordExpenseOpen(true)}
+            onOpenPaySupplier={handleOpenPaySupplier}
+          />
+        )}
+
+        {activeTab === 'payables' && (
+          <ExpensesView
+            initialSubTab="payables"
+            onOpenRecordExpense={() => setIsRecordExpenseOpen(true)}
+            onOpenPaySupplier={handleOpenPaySupplier}
+          />
+        )}
+
+        {activeTab === 'reconciliation' && (
+          <ExpensesView
+            initialSubTab="reconciliation"
+            onOpenRecordExpense={() => setIsRecordExpenseOpen(true)}
+            onOpenPaySupplier={handleOpenPaySupplier}
+          />
         )}
 
         {activeTab === 'customers' && (
@@ -208,10 +238,6 @@ const AppContent: React.FC = () => {
             onViewSaleReceipt={handleViewReceipt}
             onOpenWhatsAppReminder={(customer, sale) => handleOpenWhatsAppReminder(customer, sale)}
           />
-        )}
-
-        {activeTab === 'payables' && (
-          <PayablesView onOpenPaySupplier={handleOpenPaySupplier} />
         )}
 
         {activeTab === 'products' && <ProductsView />}

@@ -14,7 +14,7 @@ const getOffsetDate = (daysAgo: number) => {
 export const INITIAL_BUSINESS: Business = {
   id: 'biz_smartcore_001',
   name: 'Smartcore ICT Centre',
-  tagline: 'Learn. Create. Innovate.',
+  tagline: '',
   address: '12 RN Okonkwo Street, Off Okpanam, By Jarkata Hotel, Opp. Paxpen Table Water, Asaba, Delta State, Nigeria',
   phone: '+234 8148483687',
   email: 'info@smartcoreict.online',
