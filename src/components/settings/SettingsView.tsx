@@ -18,6 +18,8 @@ import {
   Trash2,
   Users,
   CheckCircle2,
+  AlertCircle,
+  Loader2,
   History,
   Building2,
   CreditCard,
@@ -179,18 +181,60 @@ export const SettingsView: React.FC = () => {
     }
   };
 
-  // Bank & Payment Details for debt reminders
-  const [bankName, setBankName] = useState(business.bankName || 'Zenith Bank');
-  const [accountName, setAccountName] = useState(business.accountName || 'Smartcore ICT Centre');
-  const [accountNumber, setAccountNumber] = useState(business.accountNumber || '1014848368');
-  const [paymentInstructions, setPaymentInstructions] = useState(
-    business.paymentInstructions || 'Please include customer/student name or invoice reference in transfer narration.'
-  );
+  // Bank & Payment Details for debt reminders & invoices
+  const [bankName, setBankName] = useState(business.bankName || '');
+  const [accountName, setAccountName] = useState(business.accountName || (business as any).bankAccountName || '');
+  const [accountNumber, setAccountNumber] = useState(business.accountNumber || (business as any).bankAccountNumber || '');
+  const [paymentInstructions, setPaymentInstructions] = useState(business.paymentInstructions || '');
   const [includeBankDetailsInReminders, setIncludeBankDetailsInReminders] = useState(
     business.includeBankDetailsInReminders ?? true
   );
 
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [isSavingBusiness, setIsSavingBusiness] = useState(false);
+
+  // Sync all form fields if business updates from server or storage
+  React.useEffect(() => {
+    if (business) {
+      setName(business.name || '');
+      setTagline(business.tagline || '');
+      setAddress(business.address || '');
+      setPhone(business.phone || '');
+      setEmail(business.email || '');
+      setWebsite(business.website || '');
+      setCurrencySymbol(business.currencySymbol || '₦');
+      setEnableTax(Boolean(business.enableTax));
+      setTaxRate(business.taxRate ?? 7.5);
+      if (business.logoUrl !== undefined) {
+        setLogoUrl(business.logoUrl || '');
+      }
+      setBankName(business.bankName || '');
+      setAccountName(business.accountName || (business as any).bankAccountName || '');
+      setAccountNumber(business.accountNumber || (business as any).bankAccountNumber || '');
+      setPaymentInstructions(business.paymentInstructions || '');
+      setIncludeBankDetailsInReminders(business.includeBankDetailsInReminders ?? true);
+    }
+  }, [
+    business.id,
+    business.name,
+    business.tagline,
+    business.address,
+    business.phone,
+    business.email,
+    business.website,
+    business.currencySymbol,
+    business.enableTax,
+    business.taxRate,
+    business.logoUrl,
+    business.bankName,
+    business.accountName,
+    (business as any).bankAccountName,
+    business.accountNumber,
+    (business as any).bankAccountNumber,
+    business.paymentInstructions,
+    business.includeBankDetailsInReminders,
+  ]);
 
   // New category
   const [newCat, setNewCat] = useState('');
@@ -207,33 +251,47 @@ export const SettingsView: React.FC = () => {
   const [editingPermissions, setEditingPermissions] = useState<Permission[]>([]);
   const [permissionSaveMessage, setPermissionSaveMessage] = useState<string | null>(null);
 
-  const handleSaveBusiness = (e: React.FormEvent) => {
+  const handleSaveBusiness = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!hasPermission('manage_business')) {
       alert('Permission Denied: Only Business Owners and authorized managers can alter company settings.');
       return;
     }
 
-    updateBusiness({
-      name: name.trim(),
-      tagline: tagline.trim(),
-      address: address.trim(),
-      phone: phone.trim(),
-      email: email.trim(),
-      website: website.trim(),
-      currencySymbol: currencySymbol.trim(),
-      enableTax,
-      taxRate: Number(taxRate) || 0,
-      logoUrl: logoUrl.trim(),
-      bankName: bankName.trim(),
-      accountName: accountName.trim(),
-      accountNumber: accountNumber.trim(),
-      paymentInstructions: paymentInstructions.trim(),
-      includeBankDetailsInReminders,
-    });
+    setIsSavingBusiness(true);
+    setSaveError(null);
+    setSavedSuccess(false);
 
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 3000);
+    try {
+      const res = await updateBusiness({
+        name: name.trim(),
+        tagline: tagline.trim(),
+        address: address.trim(),
+        phone: phone.trim(),
+        email: email.trim(),
+        website: website.trim(),
+        currencySymbol: currencySymbol.trim(),
+        enableTax,
+        taxRate: Number(taxRate) || 0,
+        logoUrl: logoUrl.trim(),
+        bankName: bankName.trim(),
+        accountName: accountName.trim(),
+        accountNumber: accountNumber.trim(),
+        paymentInstructions: paymentInstructions.trim(),
+        includeBankDetailsInReminders,
+      });
+
+      if (res && res.success === false) {
+        setSaveError(res.error || 'Failed to save business settings to the database.');
+      } else {
+        setSavedSuccess(true);
+        setTimeout(() => setSavedSuccess(false), 3500);
+      }
+    } catch (err: any) {
+      setSaveError(err?.message || 'An unexpected error occurred while saving.');
+    } finally {
+      setIsSavingBusiness(false);
+    }
   };
 
   const handleAddCategory = (e: React.FormEvent) => {
@@ -494,6 +552,19 @@ export const SettingsView: React.FC = () => {
       {/* TAB 1: Business Profile & Bank Details */}
       {activeTab === 'profile' && (
         <form onSubmit={handleSaveBusiness} className="space-y-6">
+          {savedSuccess && (
+            <div className="p-3.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl flex items-center gap-2.5 text-emerald-800 dark:text-emerald-200 text-xs font-semibold animate-in fade-in duration-200">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span>Settings and payment configuration updated successfully!</span>
+            </div>
+          )}
+
+          {saveError && (
+            <div className="p-3.5 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded-xl flex items-center gap-2.5 text-rose-800 dark:text-rose-200 text-xs font-semibold animate-in fade-in duration-200">
+              <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+              <span>{saveError}</span>
+            </div>
+          )}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* General Organization Info */}
             <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 sm:p-6 space-y-4 shadow-2xs">
@@ -894,13 +965,38 @@ export const SettingsView: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex justify-end">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+            <div className="text-xs">
+              {savedSuccess && (
+                <span className="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-300 font-semibold">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  Settings updated successfully
+                </span>
+              )}
+              {saveError && (
+                <span className="flex items-center gap-1.5 text-rose-700 dark:text-rose-300 font-semibold">
+                  <AlertCircle className="w-4 h-4 text-rose-600" />
+                  {saveError}
+                </span>
+              )}
+            </div>
+
             <button
               type="submit"
-              className="flex items-center gap-1.5 px-5 py-2.5 bg-[#4C0196] text-white text-xs font-bold rounded-xl hover:bg-[#3b0075] transition-colors cursor-pointer shadow-sm"
+              disabled={isSavingBusiness}
+              className="flex items-center gap-2 px-5 py-2.5 bg-[#4C0196] text-white text-xs font-bold rounded-xl hover:bg-[#3b0075] disabled:opacity-60 disabled:cursor-not-allowed transition-all cursor-pointer shadow-sm ml-auto"
             >
-              <Save className="w-4 h-4" />
-              <span>Save Business &amp; Payment Configuration</span>
+              {isSavingBusiness ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-white" />
+                  <span>Saving Configuration...</span>
+                </>
+              ) : (
+                <>
+                  <Save className="w-4 h-4" />
+                  <span>Save Business &amp; Payment Configuration</span>
+                </>
+              )}
             </button>
           </div>
         </form>

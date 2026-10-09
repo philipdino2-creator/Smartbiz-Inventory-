@@ -26,28 +26,21 @@ import { Sale, Customer, Payable } from './types';
 import { Plus, Check } from 'lucide-react';
 import { SplashScreen } from './components/common/SplashScreen';
 import { LoginModal } from './components/auth/LoginModal';
+import { CashierSwitchModal } from './components/auth/CashierSwitchModal';
 import { AuthScreen } from './components/auth/AuthScreen';
 
 const AppContent: React.FC = () => {
   const { business, customers, isAuthenticated, isAuthChecking } = useBusiness();
+
+  // All component state hooks grouped strictly together at the top
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [showSplash, setShowSplash] = useState(true);
   const [isLoginOpen, setIsLoginOpen] = useState(false);
-
-  React.useEffect(() => {
-    const timer = setTimeout(() => {
-      setShowSplash(false);
-    }, 750);
-    return () => clearTimeout(timer);
-  }, []);
-
-  // Modals state
+  const [isCashierSwitchOpen, setIsCashierSwitchOpen] = useState(false);
   const [isRecordSaleOpen, setIsRecordSaleOpen] = useState(false);
   const [isRecordExpenseOpen, setIsRecordExpenseOpen] = useState(false);
   const [isMoreDrawerOpen, setIsMoreDrawerOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
-
-  // Debt Payment Modal config
   const [debtModalConfig, setDebtModalConfig] = useState<{
     isOpen: boolean;
     targetType: 'customer' | 'payable';
@@ -57,8 +50,6 @@ const AppContent: React.FC = () => {
     targetType: 'customer',
     targetItem: null,
   });
-
-  // Receipt Modal config
   const [receiptModalConfig, setReceiptModalConfig] = useState<{
     isOpen: boolean;
     sale: Sale | null;
@@ -66,8 +57,6 @@ const AppContent: React.FC = () => {
     isOpen: false,
     sale: null,
   });
-
-  // WhatsApp Debt Reminder Modal config
   const [whatsAppReminderConfig, setWhatsAppReminderConfig] = useState<{
     isOpen: boolean;
     customer: Customer | null;
@@ -77,9 +66,15 @@ const AppContent: React.FC = () => {
     customer: null,
     sale: null,
   });
-
-  // Toast notification
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // All effect hooks grouped unconditionally
+  React.useEffect(() => {
+    const timer = setTimeout(() => {
+      setShowSplash(false);
+    }, 750);
+    return () => clearTimeout(timer);
+  }, []);
 
   const showToast = (message: string) => {
     setToastMessage(message);
@@ -175,6 +170,7 @@ const AppContent: React.FC = () => {
         onOpenRecordExpense={() => setIsRecordExpenseOpen(true)}
         onOpenSearch={() => setIsSearchOpen(true)}
         onOpenLogin={() => setIsLoginOpen(true)}
+        onOpenCashierSwitch={() => setIsCashierSwitchOpen(true)}
       />
 
       {/* Main Content Area */}
@@ -277,6 +273,10 @@ const AppContent: React.FC = () => {
           setIsMoreDrawerOpen(false);
           setIsLoginOpen(true);
         }}
+        onOpenCashierSwitch={() => {
+          setIsMoreDrawerOpen(false);
+          setIsCashierSwitchOpen(true);
+        }}
       />
 
       {/* Modals */}
@@ -349,6 +349,15 @@ const AppContent: React.FC = () => {
           setIsSearchOpen(false);
           setActiveTab('payables');
           handleOpenPaySupplier(payable);
+        }}
+      />
+
+      {/* Cashier & Account Switch Modal */}
+      <CashierSwitchModal
+        isOpen={isCashierSwitchOpen}
+        onClose={() => setIsCashierSwitchOpen(false)}
+        onSuccess={user => {
+          showToast(`Switched active cashier to ${user.name}`);
         }}
       />
 

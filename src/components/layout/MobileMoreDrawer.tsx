@@ -21,6 +21,7 @@ interface MobileMoreDrawerProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
   onOpenLogin?: () => void;
+  onOpenCashierSwitch?: () => void;
 }
 
 export const MobileMoreDrawer: React.FC<MobileMoreDrawerProps> = ({
@@ -29,6 +30,7 @@ export const MobileMoreDrawer: React.FC<MobileMoreDrawerProps> = ({
   activeTab,
   setActiveTab,
   onOpenLogin,
+  onOpenCashierSwitch,
 }) => {
   const { business, currentUser, resetToDemoData, logout } = useBusiness();
 
@@ -149,17 +151,21 @@ export const MobileMoreDrawer: React.FC<MobileMoreDrawerProps> = ({
 
         {/* Account / Authentication row */}
         <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">
-          {onOpenLogin && (
+          {(onOpenCashierSwitch || onOpenLogin) && (
             <button
               onClick={() => {
                 onClose();
-                onOpenLogin();
+                if (onOpenCashierSwitch) {
+                  onOpenCashierSwitch();
+                } else if (onOpenLogin) {
+                  onOpenLogin();
+                }
               }}
               className="w-full flex items-center justify-between p-3 rounded-xl bg-purple-50 dark:bg-purple-950/50 text-[#4C0196] dark:text-purple-300 border border-purple-200 dark:border-purple-800 text-xs font-bold transition-colors cursor-pointer"
             >
               <div className="flex items-center gap-2">
                 <BizFlowLogo size="xs" iconOnly />
-                <span>Account &amp; Role Switcher</span>
+                <span>Switch Account / Cashier</span>
               </div>
               <span className="text-[10px] bg-[#4C0196] text-white px-2 py-0.5 rounded font-semibold">Switch</span>
             </button>

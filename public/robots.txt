@@ -1,0 +1,12 @@
+# Robots.txt for BizFlow Production
+User-agent: *
+Allow: /
+Allow: /features
+Allow: /how-it-works
+Allow: /pricing
+Allow: /faq
+Disallow: /app
+Disallow: /app/
+Disallow: /api/
+
+Sitemap: https://bizflowapp.ai.studio/sitemap.xml

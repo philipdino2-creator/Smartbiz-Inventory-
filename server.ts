@@ -119,6 +119,27 @@ async function logServerAudit(
 // 1. AUTHENTICATION & SESSION ROUTES
 // ==========================================
 
+// Helper to normalize business profile responses with bank & reminder fields
+function formatBusinessRecord(b: any) {
+  if (!b) return null;
+  return {
+    ...b,
+    accountName: b.accountName || b.bankAccountName || '',
+    bankAccountName: b.bankAccountName || b.accountName || '',
+    accountNumber: b.accountNumber || b.bankAccountNumber || '',
+    bankAccountNumber: b.bankAccountNumber || b.accountNumber || '',
+    paymentInstructions: b.paymentInstructions || '',
+    includeBankDetailsInReminders: b.includeBankDetailsInReminders !== undefined
+      ? Boolean(b.includeBankDetailsInReminders)
+      : (b.includeBankOnReceipts !== undefined ? Boolean(b.includeBankOnReceipts) : true),
+    includeBankOnReceipts: b.includeBankOnReceipts !== undefined
+      ? Boolean(b.includeBankOnReceipts)
+      : (b.includeBankDetailsInReminders !== undefined ? Boolean(b.includeBankDetailsInReminders) : true),
+    createdAt: b.createdAt?.toISOString?.() || b.createdAt,
+    updatedAt: b.updatedAt?.toISOString?.() || b.updatedAt,
+  };
+}
+
 // Password Login
 app.post('/api/auth/login', async (req: Request, res: Response) => {
   const { email, password } = req.body;
@@ -168,7 +189,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
         active: u.active,
         permissions: u.permissions,
       },
-      business: businessList[0] || null,
+      business: formatBusinessRecord(businessList[0]),
     });
   } catch (err: any) {
     console.error('Login error:', err);
@@ -386,7 +407,7 @@ app.post(['/api/auth/register', '/api/auth/signup'], async (req: Request, res: R
         active: u.active,
         permissions: u.permissions,
       },
-      business: businessRecord,
+      business: formatBusinessRecord(businessRecord),
     });
   } catch (err: any) {
     console.error('Registration error:', err);
@@ -497,7 +518,7 @@ app.post('/api/auth/firebase-login', async (req: Request, res: Response) => {
         active: u.active,
         permissions: u.permissions,
       },
-      business: businessList[0] || null,
+      business: formatBusinessRecord(businessList[0]),
     });
   } catch (err: any) {
     console.error('Firebase login error:', err);
@@ -511,7 +532,7 @@ app.get('/api/auth/me', requireAuth, async (req: AuthRequest, res: Response) => 
     const biz = await db.select().from(schema.businesses).where(eq(schema.businesses.id, req.businessId!)).limit(1);
     res.json({
       user: req.user,
-      business: biz[0] || null,
+      business: formatBusinessRecord(biz[0]),
     });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch user state' });
@@ -537,7 +558,7 @@ app.post('/api/auth/logout', requireAuth, async (req: AuthRequest, res: Response
 app.get('/api/business', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const biz = await db.select().from(schema.businesses).where(eq(schema.businesses.id, req.businessId!)).limit(1);
-    res.json(biz[0] || null);
+    res.json(formatBusinessRecord(biz[0]));
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch business' });
   }
@@ -559,10 +580,11 @@ app.put('/api/business', requireAuth, requirePermission('manage_business'), asyn
         currencySymbol: data.currencySymbol,
         taxRate: Number(data.taxRate) || 7.5,
         enableTax: Boolean(data.enableTax),
-        bankName: data.bankName,
-        bankAccountName: data.accountName || data.bankAccountName,
-        bankAccountNumber: data.accountNumber || data.bankAccountNumber,
-        includeBankOnReceipts: Boolean(data.includeBankDetailsInReminders ?? data.includeBankOnReceipts),
+        bankName: data.bankName !== undefined ? data.bankName : undefined,
+        bankAccountName: data.accountName !== undefined ? data.accountName : data.bankAccountName,
+        bankAccountNumber: data.accountNumber !== undefined ? data.accountNumber : data.bankAccountNumber,
+        paymentInstructions: data.paymentInstructions !== undefined ? data.paymentInstructions : undefined,
+        includeBankOnReceipts: Boolean(data.includeBankDetailsInReminders ?? data.includeBankOnReceipts ?? true),
         updatedAt: new Date(),
       })
       .where(eq(schema.businesses.id, req.businessId!));
@@ -570,7 +592,7 @@ app.put('/api/business', requireAuth, requirePermission('manage_business'), asyn
     const updated = await db.select().from(schema.businesses).where(eq(schema.businesses.id, req.businessId!)).limit(1);
     await logServerAudit(req.businessId!, req.user!.id, req.user!.name, req.user!.role, 'update', 'settings', req.businessId!, 'Updated business profile and financial settings');
 
-    res.json(updated[0]);
+    res.json(formatBusinessRecord(updated[0]));
   } catch (err) {
     res.status(500).json({ error: 'Failed to update business settings' });
   }

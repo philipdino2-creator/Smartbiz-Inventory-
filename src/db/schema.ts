@@ -18,6 +18,7 @@ export const businesses = pgTable('businesses', {
   bankName: text('bank_name'),
   bankAccountName: text('bank_account_name'),
   bankAccountNumber: text('bank_account_number'),
+  paymentInstructions: text('payment_instructions'),
   includeBankOnReceipts: boolean('include_bank_on_receipts').notNull().default(true),
   lastInvoiceSequence: integer('last_invoice_sequence').notNull().default(105),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),

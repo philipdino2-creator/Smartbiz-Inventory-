@@ -1,6 +1,6 @@
 import React from 'react';
 import { useBusiness } from '../../context/BusinessContext';
-import { PlusCircle, MinusCircle, UserCheck, Search, LogIn, LogOut } from 'lucide-react';
+import { PlusCircle, MinusCircle, UserCheck, Search, Users, LogOut } from 'lucide-react';
 import { BizFlowLogo } from '../common/BizFlowLogo';
 import { ThemeToggle } from '../common/ThemeToggle';
 
@@ -11,6 +11,7 @@ interface NavbarProps {
   onOpenRecordExpense: () => void;
   onOpenSearch: () => void;
   onOpenLogin?: () => void;
+  onOpenCashierSwitch?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -20,6 +21,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenRecordExpense,
   onOpenSearch,
   onOpenLogin,
+  onOpenCashierSwitch,
 }) => {
   const { business, currentUser, setCurrentUser, users, logout } = useBusiness();
 
@@ -161,21 +163,33 @@ export const Navbar: React.FC<NavbarProps> = ({
               </select>
             </div>
 
-            {onOpenLogin && (
+            {/* Account Switcher Button - Replaces old Login door-in icon */}
+            {(onOpenCashierSwitch || onOpenLogin) && (
               <button
-                onClick={onOpenLogin}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-[#4C0196] dark:text-purple-300 bg-purple-50 dark:bg-purple-950/60 hover:bg-purple-100 dark:hover:bg-purple-900 border border-purple-200 dark:border-purple-800 transition-colors cursor-pointer"
-                title="Switch account, register, or sign in"
+                onClick={() => {
+                  if (onOpenCashierSwitch) {
+                    onOpenCashierSwitch();
+                  } else if (onOpenLogin) {
+                    onOpenLogin();
+                  }
+                }}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-[#4C0196] dark:text-purple-300 bg-purple-50 dark:bg-purple-950/60 hover:bg-purple-100 dark:hover:bg-purple-900 border border-purple-200 dark:border-purple-800 transition-colors cursor-pointer"
+                title="Switch Account / Cashier"
+                aria-label="Switch Account / Cashier"
               >
-                <LogIn className="w-3.5 h-3.5" />
-                <span className="hidden lg:inline">Switch</span>
+                <Users className="w-3.5 h-3.5" />
+                <span className="hidden lg:inline">Switch Cashier</span>
               </button>
             )}
 
+            {/* Clear touch-target spacing between switch button and logout button to prevent accidental terminations */}
+            <div className="w-px h-4 bg-slate-200 dark:bg-slate-700 hidden sm:block mx-1" />
+
             <button
               onClick={() => logout()}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-100 dark:hover:bg-rose-900 border border-rose-200 dark:border-rose-800 transition-colors cursor-pointer"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-100 dark:hover:bg-rose-900 border border-rose-200 dark:border-rose-800 transition-colors cursor-pointer"
               title="Sign out and lock workspace"
+              aria-label="Sign out and lock workspace"
             >
               <LogOut className="w-3.5 h-3.5" />
               <span className="hidden md:inline">Sign Out</span>

@@ -50,7 +50,7 @@ import { api } from '../services/api';
 
 interface BusinessContextType {
   business: Business;
-  updateBusiness: (updated: Partial<Business>) => void;
+  updateBusiness: (updated: Partial<Business>) => Promise<{ success: boolean; error?: string }>;
   currentUser: User;
   setCurrentUser: (user: User) => void;
   users: User[];
@@ -361,7 +361,19 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         api.getAuditLogs().catch(() => null),
       ]);
 
-      if (serverBiz) setBusiness(serverBiz);
+      if (serverBiz) {
+        setBusiness(prev => ({
+          ...prev,
+          ...serverBiz,
+          accountName: serverBiz.accountName || (serverBiz as any).bankAccountName || prev.accountName || '',
+          accountNumber: serverBiz.accountNumber || (serverBiz as any).bankAccountNumber || prev.accountNumber || '',
+          bankName: serverBiz.bankName || prev.bankName || '',
+          paymentInstructions: serverBiz.paymentInstructions !== undefined ? serverBiz.paymentInstructions : (prev.paymentInstructions || ''),
+          includeBankDetailsInReminders: serverBiz.includeBankDetailsInReminders !== undefined
+            ? Boolean(serverBiz.includeBankDetailsInReminders)
+            : ((serverBiz as any).includeBankOnReceipts !== undefined ? Boolean((serverBiz as any).includeBankOnReceipts) : (prev.includeBankDetailsInReminders ?? true)),
+        }));
+      }
       if (serverUsers && serverUsers.length > 0) setUsers(serverUsers);
       if (serverCust) setCustomers(serverCust);
       if (serverProd) setProducts(serverProd);
@@ -395,7 +407,17 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setIsAuthenticated(true);
         setCurrentUserId(me.user.id);
         if (me.business) {
-          setBusiness(me.business);
+          setBusiness(prev => ({
+            ...prev,
+            ...me.business,
+            accountName: me.business.accountName || (me.business as any).bankAccountName || prev.accountName || '',
+            accountNumber: me.business.accountNumber || (me.business as any).bankAccountNumber || prev.accountNumber || '',
+            bankName: me.business.bankName || prev.bankName || '',
+            paymentInstructions: me.business.paymentInstructions !== undefined ? me.business.paymentInstructions : (prev.paymentInstructions || ''),
+            includeBankDetailsInReminders: me.business.includeBankDetailsInReminders !== undefined
+              ? Boolean(me.business.includeBankDetailsInReminders)
+              : ((me.business as any).includeBankOnReceipts !== undefined ? Boolean((me.business as any).includeBankOnReceipts) : (prev.includeBankDetailsInReminders ?? true)),
+          }));
         }
         setUsers(prev => (prev.some(u => u.id === me.user.id) ? prev.map(u => u.id === me.user.id ? me.user : u) : [me.user, ...prev]));
         await fetchAllServerData();
@@ -488,9 +510,39 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     );
   };
 
-  const updateBusiness = (updated: Partial<Business>) => {
-    setBusiness(prev => ({ ...prev, ...updated, updatedAt: new Date().toISOString() }));
-    api.updateBusiness(updated).catch(() => {});
+  const updateBusiness = async (updated: Partial<Business>): Promise<{ success: boolean; error?: string }> => {
+    // Immediate local state update for fast UX
+    setBusiness(prev => ({
+      ...prev,
+      ...updated,
+      accountName: updated.accountName !== undefined ? updated.accountName : prev.accountName,
+      accountNumber: updated.accountNumber !== undefined ? updated.accountNumber : prev.accountNumber,
+      bankName: updated.bankName !== undefined ? updated.bankName : prev.bankName,
+      paymentInstructions: updated.paymentInstructions !== undefined ? updated.paymentInstructions : prev.paymentInstructions,
+      includeBankDetailsInReminders: updated.includeBankDetailsInReminders !== undefined ? updated.includeBankDetailsInReminders : prev.includeBankDetailsInReminders,
+      updatedAt: new Date().toISOString(),
+    }));
+
+    try {
+      const serverBiz = await api.updateBusiness(updated);
+      if (serverBiz) {
+        setBusiness(prev => ({
+          ...prev,
+          ...serverBiz,
+          accountName: serverBiz.accountName || (serverBiz as any).bankAccountName || prev.accountName || '',
+          accountNumber: serverBiz.accountNumber || (serverBiz as any).bankAccountNumber || prev.accountNumber || '',
+          bankName: serverBiz.bankName || prev.bankName || '',
+          paymentInstructions: serverBiz.paymentInstructions !== undefined ? serverBiz.paymentInstructions : prev.paymentInstructions,
+          includeBankDetailsInReminders: serverBiz.includeBankDetailsInReminders !== undefined
+            ? Boolean(serverBiz.includeBankDetailsInReminders)
+            : ((serverBiz as any).includeBankOnReceipts !== undefined ? Boolean((serverBiz as any).includeBankOnReceipts) : (prev.includeBankDetailsInReminders ?? true)),
+        }));
+      }
+      return { success: true };
+    } catch (err: any) {
+      console.error('Failed to update business settings on server:', err);
+      return { success: false, error: err?.message || 'Failed to save business settings to server' };
+    }
   };
 
   const setCurrentUser = (user: User) => {
