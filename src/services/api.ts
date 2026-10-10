@@ -369,6 +369,22 @@ class ApiService {
     }
   }
 
+  // SUBSCRIPTION & PLANS
+  async getPlans(): Promise<{ currency: string; currencySymbol: string; plans: any[] }> {
+    return this.request('/api/plans');
+  }
+
+  async getSubscription(): Promise<any> {
+    return this.request('/api/subscription');
+  }
+
+  async changePlan(planId: string, interval: 'monthly' | 'annual'): Promise<any> {
+    return this.request('/api/subscription/change-plan', {
+      method: 'POST',
+      body: JSON.stringify({ planId, interval }),
+    });
+  }
+
   // MIGRATION
   async importLocalStorageData(payload: { customers?: any[]; products?: any[]; sales?: any[]; expenses?: any[]; recurringExpenses?: any[] }): Promise<{ success: boolean; importedCount: number; message: string }> {
     return this.request('/api/migrate/import-localstorage', {

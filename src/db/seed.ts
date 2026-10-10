@@ -256,6 +256,25 @@ export async function seedDatabaseIfEmpty() {
       });
     }
 
+    // 11. Subscription (Smartcore flagship workspace on Business Plan)
+    const nowIso = new Date().toISOString();
+    await db.insert(schema.subscriptions).values({
+      id: `sub_${INITIAL_BUSINESS.id}`,
+      businessId: INITIAL_BUSINESS.id,
+      planId: 'business',
+      billingInterval: 'annual',
+      status: 'active',
+      startDate: nowIso,
+      currentPeriodStart: '2026-01-01',
+      currentPeriodEnd: '2026-12-31',
+      cancelAtPeriodEnd: false,
+      paymentProvider: 'none',
+      providerSubscriptionId: null,
+      providerCustomerId: null,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    });
+
     console.log('Seeding completed successfully.');
     return { seeded: true, message: 'Database seeded successfully.' };
   } catch (err) {

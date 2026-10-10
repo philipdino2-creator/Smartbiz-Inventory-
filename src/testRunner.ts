@@ -7,13 +7,14 @@ import { runPersistentSessionsTests } from './utils/persistentSessions.test';
 import { runAuthFlowVerificationTests } from './utils/authFlowVerification.test';
 import { runMarketingRoutingTests } from './utils/marketingRouting.test';
 import { runRecurringExpensesPersistenceTests } from './utils/recurringExpensesPersistence.test';
+import { runSubscriptionEntitlementsTests } from './utils/subscriptionEntitlements.test';
 
 async function runAllTests() {
   console.log('====================================================');
   console.log('SMARTCORE LEDGER — AUTOMATED OPERATIONAL POLISH SUITE');
   console.log('====================================================\n');
 
-  console.log('>>> [1/9] Running Core Financial Calculations Tests...');
+  console.log('>>> [1/10] Running Core Financial Calculations Tests...');
   const calcResult = runCalculationTests();
   calcResult.results.forEach(r => console.log('  ' + r));
   console.log(`Calculation Tests Result: ${calcResult.passed ? 'ALL PASSED' : 'SOME FAILED'}\n`);
@@ -53,12 +54,17 @@ async function runAllTests() {
   marketingResult.results.forEach(r => console.log('  ' + r));
   console.log(`Marketing & Routing Tests Result: ${marketingResult.passed ? 'ALL PASSED' : 'SOME FAILED'}\n`);
 
-  console.log('>>> [9/9] Running Recurring Expenses Persistence & Multi-Tenant Isolation Tests...');
+  console.log('>>> [9/10] Running Recurring Expenses Persistence & Multi-Tenant Isolation Tests...');
   const recurringResult = await runRecurringExpensesPersistenceTests();
   recurringResult.results.forEach(r => console.log('  ' + r));
   console.log(`Recurring Expenses Persistence Result: ${recurringResult.passed ? 'ALL PASSED' : 'SOME FAILED'}\n`);
 
-  console.log('--- AUTH, MARKETING & PERSISTENCE VERIFICATION SUMMARY ---');
+  console.log('>>> [10/10] Running Pricing, Plan Entitlements & Subscription Readiness Tests...');
+  const subscriptionResult = await runSubscriptionEntitlementsTests();
+  subscriptionResult.results.forEach(r => console.log('  ' + r));
+  console.log(`Subscription Entitlements Result: ${subscriptionResult.passed ? 'ALL PASSED' : 'SOME FAILED'}\n`);
+
+  console.log('--- AUTH, MARKETING, PERSISTENCE & SUBSCRIPTION VERIFICATION SUMMARY ---');
   Object.entries(authFlowResult.summary).forEach(([k, v]) => {
     console.log(`  [Auth] ${k}: ${v}`);
   });
@@ -67,6 +73,9 @@ async function runAllTests() {
   });
   Object.entries(recurringResult.summary).forEach(([k, v]) => {
     console.log(`  [Recurring Persistence] ${k}: ${v}`);
+  });
+  Object.entries(subscriptionResult.summary).forEach(([k, v]) => {
+    console.log(`  [Subscription Entitlements] ${k}: ${v}`);
   });
   console.log('-----------------------------------------------------------\n');
 
@@ -79,7 +88,8 @@ async function runAllTests() {
     sessionResult.passed &&
     authFlowResult.passed &&
     marketingResult.passed &&
-    recurringResult.passed;
+    recurringResult.passed &&
+    subscriptionResult.passed;
 
   console.log('====================================================');
   if (overallPassed) {

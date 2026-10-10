@@ -276,8 +276,30 @@ export const sessions = pgTable('sessions', {
   index('sessions_expires_at_idx').on(table.expiresAt),
 ]);
 
+// 15. SUBSCRIPTIONS & ENTITLEMENTS
+export const subscriptions = pgTable('subscriptions', {
+  id: text('id').primaryKey(),
+  businessId: text('business_id').references(() => businesses.id, { onDelete: 'cascade' }).notNull().unique(),
+  planId: text('plan_id').notNull().default('free'), // 'free' | 'starter' | 'business' | 'business_plus'
+  billingInterval: text('billing_interval').notNull().default('monthly'), // 'monthly' | 'annual'
+  status: text('status').notNull().default('active'), // 'active' | 'pending_payment' | 'past_due' | 'cancelled' | 'expired'
+  startDate: text('start_date').notNull(),
+  currentPeriodStart: text('current_period_start').notNull(),
+  currentPeriodEnd: text('current_period_end').notNull(),
+  cancelAtPeriodEnd: boolean('cancel_at_period_end').notNull().default(false),
+  paymentProvider: text('payment_provider').notNull().default('none'), // 'none' | 'paystack' | 'flutterwave'
+  providerSubscriptionId: text('provider_subscription_id'),
+  providerCustomerId: text('provider_customer_id'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => [
+  index('subscriptions_business_id_idx').on(table.businessId),
+  index('subscriptions_plan_id_idx').on(table.planId),
+  index('subscriptions_status_idx').on(table.status),
+]);
+
 // RELATIONS
-export const businessesRelations = relations(businesses, ({ many }) => ({
+export const businessesRelations = relations(businesses, ({ one, many }) => ({
   users: many(users),
   customers: many(customers),
   products: many(products),
@@ -290,6 +312,14 @@ export const businessesRelations = relations(businesses, ({ many }) => ({
   dailyReconciliations: many(dailyReconciliations),
   auditLogs: many(auditLogs),
   sessions: many(sessions),
+  subscription: one(subscriptions),
+}));
+
+export const subscriptionsRelations = relations(subscriptions, ({ one }) => ({
+  business: one(businesses, {
+    fields: [subscriptions.businessId],
+    references: [businesses.id],
+  }),
 }));
 
 export const sessionsRelations = relations(sessions, ({ one }) => ({
@@ -321,3 +351,4 @@ export const saleItemsRelations = relations(saleItems, ({ one }) => ({
     references: [sales.id],
   }),
 }));
+

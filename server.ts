@@ -17,6 +17,16 @@ import { adminAuth } from './src/lib/firebase-admin.ts';
 import { validateOwnerProtection, hasPermission } from './src/utils/permissionUtils.ts';
 import { calculateSaleTotals, roundToKobo, calculateExpectedCash, calculateReconciliationVariance } from './src/utils/calculations.ts';
 import type { Permission, User } from './src/types/index.ts';
+import { PLANS, resolvePlan, formatPlanPrice, calculateAnnualSavingsNgn } from './src/config/plans.ts';
+import {
+  checkPlanLimit,
+  checkFeatureEntitlement,
+  getFullSubscriptionStatus,
+  getBusinessSubscription,
+  getBusinessUsage,
+} from './src/services/subscriptionService.ts';
+import { activePaymentProvider } from './src/services/paymentProvider.ts';
+import type { PlanId, BillingInterval } from './src/types/subscription.ts';
 
 dotenv.config();
 
@@ -680,6 +690,20 @@ app.post('/api/users', requireAuth, requirePermission('manage_users'), async (re
   }
 
   try {
+    const limitCheck = await checkPlanLimit(req.businessId!, 'users');
+    if (!limitCheck.allowed) {
+      res.status(403).json({
+        error: limitCheck.upgradeMessage,
+        code: 'PLAN_LIMIT_REACHED',
+        limitType: limitCheck.limitType,
+        currentUsage: limitCheck.currentUsage,
+        maxAllowed: limitCheck.maxAllowed,
+        planId: limitCheck.planId,
+        planName: limitCheck.planName,
+      });
+      return;
+    }
+
     const existing = await db.select().from(schema.users).where(eq(schema.users.email, email.trim().toLowerCase())).limit(1);
     if (existing.length > 0) {
       res.status(400).json({ error: 'A team member with this email already exists' });
@@ -803,6 +827,20 @@ app.post('/api/customers', requireAuth, requirePermission('create_customer'), as
   }
 
   try {
+    const limitCheck = await checkPlanLimit(req.businessId!, 'customers');
+    if (!limitCheck.allowed) {
+      res.status(403).json({
+        error: limitCheck.upgradeMessage,
+        code: 'PLAN_LIMIT_REACHED',
+        limitType: limitCheck.limitType,
+        currentUsage: limitCheck.currentUsage,
+        maxAllowed: limitCheck.maxAllowed,
+        planId: limitCheck.planId,
+        planName: limitCheck.planName,
+      });
+      return;
+    }
+
     const id = `cust_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const now = new Date().toISOString();
     await db.insert(schema.customers).values({
@@ -888,6 +926,20 @@ app.post('/api/products', requireAuth, requirePermission('create_product'), asyn
   }
 
   try {
+    const limitCheck = await checkPlanLimit(req.businessId!, 'products');
+    if (!limitCheck.allowed) {
+      res.status(403).json({
+        error: limitCheck.upgradeMessage,
+        code: 'PLAN_LIMIT_REACHED',
+        limitType: limitCheck.limitType,
+        currentUsage: limitCheck.currentUsage,
+        maxAllowed: limitCheck.maxAllowed,
+        planId: limitCheck.planId,
+        planName: limitCheck.planName,
+      });
+      return;
+    }
+
     const id = data.id || `prod_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const now = new Date().toISOString();
     await db.insert(schema.products).values({
@@ -1048,12 +1100,21 @@ app.post('/api/sales', requireAuth, requirePermission('create_sale'), async (req
   }
 
   try {
-    // ATOMIC INVOICE NUMBER GENERATION VIA POSTGRES TRANSACTION
+    // ATOMIC INVOICE NUMBER GENERATION & PLAN LIMIT ENFORCEMENT VIA POSTGRES TRANSACTION
     const result = await db.transaction(async (tx) => {
-      // Lock the business row for update to prevent concurrent race conditions
+      // Lock the business row for update to serialize creation requests for this business and prevent race conditions
       const bizRows = await tx.select().from(schema.businesses).where(eq(schema.businesses.id, req.businessId!)).for('update');
       if (bizRows.length === 0) throw new Error('Business record not found');
       const biz = bizRows[0];
+
+      // Concurrency-safe limit enforcement inside row-locked transaction
+      const limitCheck = await checkPlanLimit(req.businessId!, 'monthlySales', tx);
+      if (!limitCheck.allowed) {
+        const limitError: any = new Error(limitCheck.upgradeMessage);
+        limitError.code = 'PLAN_LIMIT_REACHED';
+        limitError.details = limitCheck;
+        throw limitError;
+      }
 
       // Query max existing sequence from sales table
       const maxSeqQuery = await tx.execute(
@@ -1161,6 +1222,18 @@ app.post('/api/sales', requireAuth, requirePermission('create_sale'), async (req
 
     res.json({ success: true, ...result });
   } catch (err: any) {
+    if (err.code === 'PLAN_LIMIT_REACHED') {
+      res.status(403).json({
+        error: err.details.upgradeMessage,
+        code: 'PLAN_LIMIT_REACHED',
+        limitType: err.details.limitType,
+        currentUsage: err.details.currentUsage,
+        maxAllowed: err.details.maxAllowed,
+        planId: err.details.planId,
+        planName: err.details.planName,
+      });
+      return;
+    }
     console.error('Failed to create sale:', err);
     res.status(500).json({ error: err.message || 'Failed to record sale' });
   }
@@ -1443,32 +1516,63 @@ app.post('/api/expenses', requireAuth, requirePermission('create_expense'), asyn
   try {
     const id = `exp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const now = new Date().toISOString();
-    await db.insert(schema.expenses).values({
-      id,
-      businessId: req.businessId!,
-      date: expDate,
-      time: data.time || new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
-      category: data.category || 'General',
-      description: data.description?.trim() || 'Business expense',
-      amount: String(numAmount),
-      paymentMethod: data.paymentMethod || 'Cash',
-      vendorName: data.vendorName?.trim() || 'General Vendor',
-      referenceNumber: data.referenceNumber?.trim() || null,
-      notes: data.notes?.trim() || null,
-      recordedByUserId: req.user!.id,
-      recordedByUserName: req.user!.name,
-      recurringExpenseId: data.recurringExpenseId || null,
-      occurrenceKey: data.occurrenceKey || null,
-      createdAt: now,
-      updatedAt: now,
+
+    // ATOMIC EXPENSE CREATION & PLAN LIMIT ENFORCEMENT VIA POSTGRES TRANSACTION
+    await db.transaction(async (tx) => {
+      // Lock the business row for update to serialize concurrent creation requests for this business
+      const bizRows = await tx.select().from(schema.businesses).where(eq(schema.businesses.id, req.businessId!)).for('update');
+      if (bizRows.length === 0) throw new Error('Business record not found');
+
+      // Concurrency-safe limit enforcement inside row-locked transaction
+      const limitCheck = await checkPlanLimit(req.businessId!, 'monthlyExpenses', tx);
+      if (!limitCheck.allowed) {
+        const limitError: any = new Error(limitCheck.upgradeMessage);
+        limitError.code = 'PLAN_LIMIT_REACHED';
+        limitError.details = limitCheck;
+        throw limitError;
+      }
+
+      await tx.insert(schema.expenses).values({
+        id,
+        businessId: req.businessId!,
+        date: expDate,
+        time: data.time || new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+        category: data.category || 'General',
+        description: data.description?.trim() || 'Business expense',
+        amount: String(numAmount),
+        paymentMethod: data.paymentMethod || 'Cash',
+        vendorName: data.vendorName?.trim() || 'General Vendor',
+        referenceNumber: data.referenceNumber?.trim() || null,
+        notes: data.notes?.trim() || null,
+        recordedByUserId: req.user!.id,
+        recordedByUserName: req.user!.name,
+        recurringExpenseId: data.recurringExpenseId || null,
+        occurrenceKey: data.occurrenceKey || null,
+        createdAt: now,
+        updatedAt: now,
+      });
     });
 
     await logServerAudit(req.businessId!, req.user!.id, req.user!.name, req.user!.role, 'create', 'expense', id, `Recorded expense of ₦${numAmount.toLocaleString()} (${data.category})`);
     res.json({ success: true, id });
-  } catch (err) {
+  } catch (err: any) {
+    if (err.code === 'PLAN_LIMIT_REACHED') {
+      res.status(403).json({
+        error: err.details.upgradeMessage,
+        code: 'PLAN_LIMIT_REACHED',
+        limitType: err.details.limitType,
+        currentUsage: err.details.currentUsage,
+        maxAllowed: err.details.maxAllowed,
+        planId: err.details.planId,
+        planName: err.details.planName,
+      });
+      return;
+    }
+    console.error('Failed to record expense:', err);
     res.status(500).json({ error: 'Failed to record expense' });
   }
 });
+
 
 // Update Expense with Closed-Day Protection
 app.put('/api/expenses/:id', requireAuth, requirePermission('edit_expense'), async (req: AuthRequest, res: Response) => {
@@ -1767,6 +1871,16 @@ app.post('/api/recurring-expenses', requireAuth, requirePermission('manage_recur
   const frequency = validFrequencies.includes(data.frequency) ? data.frequency : 'monthly';
 
   try {
+    const featureCheck = await checkFeatureEntitlement(req.businessId!, 'recurringExpenses');
+    if (!featureCheck.allowed) {
+      res.status(403).json({
+        error: 'Recurring expense automation is available on the Starter and Business plans. Please upgrade your plan in BizFlow settings to create recurring schedules. Existing records remain fully accessible.',
+        code: 'FEATURE_NOT_IN_PLAN',
+        feature: 'recurringExpenses',
+      });
+      return;
+    }
+
     const id = data.id || `rec_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const now = new Date().toISOString();
 
@@ -2477,7 +2591,197 @@ app.post('/api/migrate/import-localstorage', requireAuth, requirePermission('man
 });
 
 // ==========================================
-// 13. VITE / STATIC SERVING, STARTUP & GRACEFUL SHUTDOWN
+// 13. PLANS, SUBSCRIPTIONS & ENTITLEMENTS
+// ==========================================
+
+// Public plan catalog and pricing
+app.get('/api/plans', (_req: Request, res: Response) => {
+  res.json({
+    currency: 'NGN',
+    currencySymbol: '₦',
+    plans: Object.values(PLANS).map(p => ({
+      ...p,
+      annualSavingsNgn: calculateAnnualSavingsNgn(p.id),
+    })),
+  });
+});
+
+// Authoritative subscription status & real-time usage metrics for authenticated business
+app.get('/api/subscription', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const status = await getFullSubscriptionStatus(req.businessId!);
+    res.json(status);
+  } catch (err: any) {
+    console.error('Failed to get subscription status:', err);
+    res.status(500).json({ error: 'Failed to retrieve subscription status' });
+  }
+});
+
+// Request plan change (downgrade to Free is permitted; paid activation requires payment gateway)
+app.post('/api/subscription/change-plan', requireAuth, requirePermission('manage_business'), async (req: AuthRequest, res: Response) => {
+  const { planId, interval } = req.body;
+  if (!planId || !(planId in PLANS)) {
+    res.status(400).json({ error: 'Valid plan identifier is required (free, starter, business)' });
+    return;
+  }
+
+  if (planId === 'business_plus') {
+    res.status(400).json({
+      error: 'Business Plus is a future plan and is not yet available for subscription.',
+      code: 'PLAN_NOT_AVAILABLE',
+    });
+    return;
+  }
+
+  const targetPlan = PLANS[planId as PlanId];
+  const billingInterval: BillingInterval = interval === 'annual' ? 'annual' : 'monthly';
+
+  try {
+    // Switching or downgrading to Free tier is safe and immediate
+    if (planId === 'free') {
+      const existing = await db
+        .select()
+        .from(schema.subscriptions)
+        .where(eq(schema.subscriptions.businessId, req.businessId!))
+        .limit(1);
+
+      const nowIso = new Date().toISOString();
+      if (existing.length > 0) {
+        await db
+          .update(schema.subscriptions)
+          .set({
+            planId: 'free',
+            billingInterval: 'monthly',
+            status: 'active',
+            cancelAtPeriodEnd: false,
+            updatedAt: nowIso,
+          })
+          .where(eq(schema.subscriptions.businessId, req.businessId!));
+      } else {
+        await db.insert(schema.subscriptions).values({
+          id: `sub_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          businessId: req.businessId!,
+          planId: 'free',
+          billingInterval: 'monthly',
+          status: 'active',
+          startDate: nowIso,
+          currentPeriodStart: nowIso.slice(0, 10),
+          currentPeriodEnd: '2099-12-31',
+          cancelAtPeriodEnd: false,
+          paymentProvider: 'none',
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        });
+      }
+
+      await logServerAudit(
+        req.businessId!,
+        req.user!.id,
+        req.user!.name,
+        req.user!.role,
+        'update',
+        'subscription',
+        req.businessId!,
+        `Switched subscription plan to Free tier. Historical business records preserved.`
+      );
+
+      const updatedStatus = await getFullSubscriptionStatus(req.businessId!);
+      res.json({
+        success: true,
+        message: 'Successfully switched to Free plan. All historical data remains intact.',
+        ...updatedStatus,
+      });
+      return;
+    }
+
+    // For paid plans (Starter / Business), verify payment provider integration
+    if (!activePaymentProvider.isConfigured) {
+      res.status(402).json({
+        error: `Payment Gateway Integration in Progress: Automated checkout for ${targetPlan.name} (₦${billingInterval === 'annual' ? targetPlan.annualPriceNgn.toLocaleString() + '/yr' : targetPlan.monthlyPriceNgn.toLocaleString() + '/mo'}) via Paystack and Flutterwave is currently being finalized. Your business records remain securely active on your current tier.`,
+        code: 'PAYMENT_GATEWAY_PENDING',
+        plan: targetPlan,
+      });
+      return;
+    }
+
+    res.status(501).json({
+      error: 'Automated payment processing is not yet enabled on this server.',
+    });
+  } catch (err: any) {
+    console.error('Failed to change subscription plan:', err);
+    res.status(500).json({ error: 'Failed to update subscription' });
+  }
+});
+
+// Administrative plan assignment (guarded for testing and authorized administrative configuration)
+app.post('/api/subscription/admin-set-plan', requireAuth, requirePermission('manage_business'), async (req: AuthRequest, res: Response) => {
+  if (isProduction && process.env.ALLOW_ADMIN_PLAN_OVERRIDE !== 'true') {
+    res.status(403).json({ error: 'Direct plan assignment is disabled in production without payment verification' });
+    return;
+  }
+
+  const { planId, billingInterval = 'monthly' } = req.body;
+  if (!planId || !(planId in PLANS)) {
+    res.status(400).json({ error: 'Invalid planId' });
+    return;
+  }
+
+  try {
+    const nowIso = new Date().toISOString();
+    const existing = await db
+      .select()
+      .from(schema.subscriptions)
+      .where(eq(schema.subscriptions.businessId, req.businessId!))
+      .limit(1);
+
+    if (existing.length > 0) {
+      await db
+        .update(schema.subscriptions)
+        .set({
+          planId,
+          billingInterval,
+          status: 'active',
+          updatedAt: nowIso,
+        })
+        .where(eq(schema.subscriptions.businessId, req.businessId!));
+    } else {
+      await db.insert(schema.subscriptions).values({
+        id: `sub_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        businessId: req.businessId!,
+        planId,
+        billingInterval,
+        status: 'active',
+        startDate: nowIso,
+        currentPeriodStart: nowIso.slice(0, 10),
+        currentPeriodEnd: '2026-12-31',
+        cancelAtPeriodEnd: false,
+        paymentProvider: 'none',
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      });
+    }
+
+    await logServerAudit(
+      req.businessId!,
+      req.user!.id,
+      req.user!.name,
+      req.user!.role,
+      'update',
+      'subscription',
+      req.businessId!,
+      `Administrative plan configuration: ${planId} (${billingInterval})`
+    );
+
+    const updatedStatus = await getFullSubscriptionStatus(req.businessId!);
+    res.json({ success: true, ...updatedStatus });
+  } catch (err: any) {
+    console.error('Failed to set administrative plan:', err);
+    res.status(500).json({ error: 'Failed to set plan' });
+  }
+});
+
+// ==========================================
+// 14. VITE / STATIC SERVING, STARTUP & GRACEFUL SHUTDOWN
 // ==========================================
 
 export async function gracefulShutdown(signal: string, exitProcess: boolean = true): Promise<void> {

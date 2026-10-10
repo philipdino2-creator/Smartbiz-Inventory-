@@ -47,12 +47,15 @@ import {
   DEFAULT_ROLE_PERMISSIONS,
 } from '../utils/permissionUtils';
 import { api } from '../services/api';
+import type { SubscriptionStatusResponse } from '../types/subscription';
 
 interface BusinessContextType {
   business: Business;
   updateBusiness: (updated: Partial<Business>) => Promise<{ success: boolean; error?: string }>;
   currentUser: User;
   setCurrentUser: (user: User) => void;
+  subscriptionStatus: SubscriptionStatusResponse | null;
+  refreshSubscription: () => Promise<void>;
   users: User[];
   addUser: (user: Omit<User, 'id' | 'businessId'>) => { success: boolean; user?: User; message?: string };
   updateUser: (id: string, updated: Partial<User>) => void;
@@ -282,6 +285,8 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   });
 
+  const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatusResponse | null>(null);
+
   // Sync to local storage for offline resiliency
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.BUSINESS, JSON.stringify(business));
@@ -353,6 +358,7 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         serverRecExp,
         serverRecon,
         serverAudit,
+        serverSub,
       ] = await Promise.all([
         api.getBusiness().catch(() => null),
         api.getUsers().catch(() => null),
@@ -365,6 +371,7 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         api.getRecurringExpenses().catch(() => null),
         api.getReconciliations().catch(() => null),
         api.getAuditLogs().catch(() => null),
+        api.getSubscription().catch(() => null),
       ]);
 
       if (serverBiz) {
@@ -390,10 +397,20 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       if (serverRecExp) setRecurringExpenses(serverRecExp);
       if (serverRecon) setReconciliations(serverRecon);
       if (serverAudit) setAuditLogs(serverAudit);
+      if (serverSub) setSubscriptionStatus(serverSub);
 
       setIsBackendConnected(true);
     } catch (err) {
       console.warn('Backend server currently syncing or offline, using cached records:', err);
+    }
+  }, []);
+
+  const refreshSubscription = useCallback(async () => {
+    try {
+      const sub = await api.getSubscription();
+      if (sub) setSubscriptionStatus(sub);
+    } catch (err) {
+      console.warn('Subscription refresh:', err);
     }
   }, []);
 
@@ -1749,6 +1766,8 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         updateBusiness,
         currentUser,
         setCurrentUser,
+        subscriptionStatus,
+        refreshSubscription,
         users,
         addUser,
         updateUser,
