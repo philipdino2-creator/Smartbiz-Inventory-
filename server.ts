@@ -2846,9 +2846,26 @@ export async function gracefulShutdown(signal: string, exitProcess: boolean = tr
 
 export async function startServer() {
   console.log('[STARTUP] Verifying database connectivity and readiness...');
-  const initialHealth = await checkDatabaseHealth();
-  if (!initialHealth.ok) {
-    console.error('[STARTUP ERROR] Database readiness check failed (unable to reach PostgreSQL). Server startup aborted.');
+  const maxRetries = 5;
+  const baseDelayMs = 1000;
+  let dbReady = false;
+  let lastError: string | undefined;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const health = await checkDatabaseHealth();
+    if (health.ok) {
+      dbReady = true;
+      break;
+    }
+    lastError = health.error;
+    console.warn(`[STARTUP] Database check attempt ${attempt}/${maxRetries} failed (${lastError || "connection error"}). Retrying in ${attempt * baseDelayMs}ms...`);
+    if (attempt < maxRetries) {
+      await new Promise((resolve) => setTimeout(resolve, attempt * baseDelayMs));
+    }
+  }
+
+  if (!dbReady) {
+    console.error(`[STARTUP ERROR] Database readiness check failed after ${maxRetries} attempts (unable to reach PostgreSQL: ${lastError || "unknown error"}). Server startup aborted.`);
     process.exit(1);
   }
   console.log('[STARTUP] Database connectivity verified (PostgreSQL ready).');

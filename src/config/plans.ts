@@ -1,4 +1,4 @@
-import { PlanId, PlanDefinition, BillingInterval } from '../types/subscription';
+import { PlanId, PlanDefinition, BillingInterval } from '../types/subscription.ts';
 
 /**
  * 1 NGN = 100 KOBO.

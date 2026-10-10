@@ -207,5 +207,60 @@ export async function runRuntimeReliabilityTests(): Promise<{ passed: boolean; r
 
   assert(shutdownTriggerCount === 1, 'Duplicate SIGTERM/SIGINT signals executed cleanup exactly once (idempotent)');
 
+  // =========================================================================
+  // 8. Startup Database Retry Resilience (Cloud Run Cold-Start Tolerance)
+  // =========================================================================
+  async function simulateStartupWithRetry(
+    maxRetries: number,
+    queryFn: (attempt: number) => Promise<{ ok: boolean; error?: string }>
+  ): Promise<{ started: boolean; attemptsUsed: number; error?: string }> {
+    let attemptsUsed = 0;
+    let lastError: string | undefined;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      attemptsUsed++;
+      const health = await queryFn(attempt);
+      if (health.ok) {
+        return { started: true, attemptsUsed };
+      }
+      lastError = health.error;
+    }
+    return { started: false, attemptsUsed, error: lastError };
+  }
+
+  // Case A: Transient failure on attempt 1, recovery on attempt 2
+  const transientRetryResult = await simulateStartupWithRetry(5, async (attempt) => {
+    if (attempt === 1) {
+      return { ok: false, error: 'Database query failed or timed out' };
+    }
+    return { ok: true };
+  });
+  assert(transientRetryResult.started === true, 'Server startup succeeds when database connection recovers on retry');
+  assert(transientRetryResult.attemptsUsed === 2, 'Startup retry used exactly 2 attempts for transient failure recovery');
+
+  // Case B: Persistent failure across all retries
+  const persistentFailResult = await simulateStartupWithRetry(3, async () => {
+    return { ok: false, error: 'Database query failed or timed out' };
+  });
+  assert(persistentFailResult.started === false, 'Persistent database failure safely aborts startup without hanging');
+  assert(persistentFailResult.attemptsUsed === 3, 'All configured retries were exhausted before aborting');
+  assert(Boolean(persistentFailResult.error), 'Safe diagnostic error is captured on startup abort');
+
+  // =========================================================================
+  // 9. Production Startup Packaging & esbuild Availability
+  // =========================================================================
+  const fs = await import('fs');
+  const path = await import('path');
+  const pkgContent = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf-8'));
+
+  assert(pkgContent.scripts?.start === 'node server.js', 'Production start script runs compiled "node server.js"');
+  assert(
+    Boolean(pkgContent.dependencies?.esbuild),
+    '"esbuild" is declared in production dependencies so image builds never fail when devDependencies are omitted'
+  );
+  assert(
+    pkgContent.scripts?.build?.includes('esbuild server.ts'),
+    'build script compiles server.ts into server.js via esbuild'
+  );
+
   return { passed, results };
 }

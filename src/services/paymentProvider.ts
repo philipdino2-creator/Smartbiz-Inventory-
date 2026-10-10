@@ -1,4 +1,4 @@
-import { PlanId, BillingInterval, BusinessSubscription } from '../types/subscription';
+import { PlanId, BillingInterval, BusinessSubscription } from '../types/subscription.ts';
 
 export interface CheckoutSessionRequest {
   businessId: string;
