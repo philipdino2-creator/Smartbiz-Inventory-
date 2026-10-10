@@ -28,12 +28,45 @@ import { SplashScreen } from './components/common/SplashScreen';
 import { LoginModal } from './components/auth/LoginModal';
 import { CashierSwitchModal } from './components/auth/CashierSwitchModal';
 import { AuthScreen } from './components/auth/AuthScreen';
+import { RouterProvider, useRouter } from './context/RouterContext';
+import { MarketingLayout } from './components/marketing/MarketingLayout';
+import { updatePageSeo } from './utils/seo';
+
+const getSubTabFromPath = (pathname: string): string => {
+  if (pathname.startsWith('/app')) {
+    const sub = pathname.replace('/app', '').replace(/^\//, '');
+    if (
+      sub &&
+      [
+        'sales',
+        'expenses',
+        'recurring',
+        'payables',
+        'reconciliation',
+        'customers',
+        'products',
+        'ledger',
+        'reports',
+        'settings',
+      ].includes(sub)
+    ) {
+      return sub;
+    }
+  }
+  return 'dashboard';
+};
 
 const AppContent: React.FC = () => {
   const { business, customers, isAuthenticated, isAuthChecking } = useBusiness();
+  const { path, navigate, isPublicRoute, isAuthRoute, isAppRoute, getSafeReturnUrl } = useRouter();
 
   // All component state hooks grouped strictly together at the top
-  const [activeTab, setActiveTab] = useState<string>('dashboard');
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return getSubTabFromPath(window.location.pathname);
+    }
+    return 'dashboard';
+  });
   const [showSplash, setShowSplash] = useState(true);
   const [isLoginOpen, setIsLoginOpen] = useState(false);
   const [isCashierSwitchOpen, setIsCashierSwitchOpen] = useState(false);
@@ -75,6 +108,25 @@ const AppContent: React.FC = () => {
     }, 750);
     return () => clearTimeout(timer);
   }, []);
+
+  // Sync document title and OpenGraph metadata
+  React.useEffect(() => {
+    updatePageSeo(path);
+  }, [path]);
+
+  // Sync activeTab whenever user navigates via browser back/forward buttons
+  React.useEffect(() => {
+    if (path.startsWith('/app')) {
+      const targetTab = getSubTabFromPath(path);
+      setActiveTab(targetTab);
+    }
+  }, [path]);
+
+  const handleTabChange = (newTab: string) => {
+    setActiveTab(newTab);
+    const targetPath = newTab === 'dashboard' ? '/app' : `/app/${newTab}`;
+    navigate(targetPath, { replace: true });
+  };
 
   const showToast = (message: string) => {
     setToastMessage(message);
@@ -152,12 +204,44 @@ const AppContent: React.FC = () => {
 
   // During initial auth session verification or startup splash, show clean splash screen
   if (isAuthChecking || showSplash) {
-    return <SplashScreen businessName={business?.name || 'Smartcore ICT Centre'} />;
+    return <SplashScreen businessName="BizFlow" />;
   }
 
-  // When unauthenticated, show the AuthScreen. Dashboard and workspace are completely blocked!
-  if (!isAuthenticated) {
-    return <AuthScreen />;
+  // 1. PUBLIC MARKETING WEBSITE (/, /features, /how-it-works, /pricing, /faq)
+  if (isPublicRoute) {
+    return <MarketingLayout />;
+  }
+
+  // 2. AUTHENTICATION PAGES (/login, /register, /signup, /forgot-password)
+  if (isAuthRoute) {
+    if (isAuthenticated) {
+      navigate(getSafeReturnUrl(), { replace: true });
+      return null;
+    }
+    const initialMode =
+      path === '/register' || path === '/signup'
+        ? 'signup'
+        : path === '/forgot-password'
+        ? 'forgot'
+        : 'signin';
+    return <AuthScreen initialMode={initialMode} />;
+  }
+
+  // 3. PROTECTED APPLICATION WORKSPACE (/app or /app/*)
+  if (isAppRoute) {
+    if (!isAuthenticated) {
+      const safeReturn = encodeURIComponent(path);
+      navigate(`/login?returnTo=${safeReturn}`, { replace: true });
+      return <AuthScreen initialMode="signin" />;
+    }
+  } else {
+    // Unmatched fallback routes
+    if (!isAuthenticated) {
+      return <MarketingLayout />;
+    } else {
+      navigate('/app', { replace: true });
+      return null;
+    }
   }
 
   return (
@@ -165,7 +249,7 @@ const AppContent: React.FC = () => {
       {/* Top Bar Contract compliant Navbar */}
       <Navbar
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        setActiveTab={handleTabChange}
         onOpenRecordSale={() => setIsRecordSaleOpen(true)}
         onOpenRecordExpense={() => setIsRecordExpenseOpen(true)}
         onOpenSearch={() => setIsSearchOpen(true)}
@@ -179,11 +263,11 @@ const AppContent: React.FC = () => {
           <DashboardView
             onOpenRecordSale={() => setIsRecordSaleOpen(true)}
             onOpenRecordExpense={() => setIsRecordExpenseOpen(true)}
-            onOpenAddProduct={() => setActiveTab('products')}
+            onOpenAddProduct={() => handleTabChange('products')}
             onViewSaleReceipt={handleViewReceipt}
             onOpenCollectDebt={handleOpenCollectDebt}
             onOpenPaySupplier={handleOpenPaySupplier}
-            setActiveTab={setActiveTab}
+            setActiveTab={handleTabChange}
           />
         )}
 
@@ -259,7 +343,7 @@ const AppContent: React.FC = () => {
       {/* Mobile Bottom Tab Bar */}
       <MobileTabBar
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        setActiveTab={handleTabChange}
         onOpenMoreMenu={() => setIsMoreDrawerOpen(true)}
       />
 
@@ -268,7 +352,7 @@ const AppContent: React.FC = () => {
         isOpen={isMoreDrawerOpen}
         onClose={() => setIsMoreDrawerOpen(false)}
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        setActiveTab={handleTabChange}
         onOpenLogin={() => {
           setIsMoreDrawerOpen(false);
           setIsLoginOpen(true);
@@ -333,7 +417,7 @@ const AppContent: React.FC = () => {
         isOpen={isSearchOpen}
         onClose={() => setIsSearchOpen(false)}
         onNavigateToTab={tab => {
-          setActiveTab(tab);
+          handleTabChange(tab);
           setIsSearchOpen(false);
         }}
         onViewSaleReceipt={sale => {
@@ -342,12 +426,12 @@ const AppContent: React.FC = () => {
         }}
         onSelectCustomer={customer => {
           setIsSearchOpen(false);
-          setActiveTab('customers');
+          handleTabChange('customers');
           handleOpenCollectDebt(customer);
         }}
         onSelectPayable={payable => {
           setIsSearchOpen(false);
-          setActiveTab('payables');
+          handleTabChange('payables');
           handleOpenPaySupplier(payable);
         }}
       />
@@ -380,8 +464,10 @@ const AppContent: React.FC = () => {
 
 export default function App() {
   return (
-    <BusinessProvider>
-      <AppContent />
-    </BusinessProvider>
+    <RouterProvider>
+      <BusinessProvider>
+        <AppContent />
+      </BusinessProvider>
+    </RouterProvider>
   );
 }

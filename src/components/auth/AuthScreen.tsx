@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   CheckCircle2,
   ArrowRight,
+  ArrowLeft,
   UserPlus,
   LogIn,
   Eye,
@@ -28,6 +29,8 @@ import {
   ChevronRight,
   RotateCcw,
 } from 'lucide-react';
+import { useRouter, Link } from '../../context/RouterContext';
+import { updatePageSeo } from '../../utils/seo';
 
 interface AuthScreenProps {
   initialMode?: 'signin' | 'signup' | 'forgot';
@@ -35,7 +38,18 @@ interface AuthScreenProps {
 
 export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'signin' }) => {
   const { business, users, setCurrentUser, handleAuthSuccess } = useBusiness();
+  const { navigate, getSafeReturnUrl, path } = useRouter();
   const [mode, setMode] = useState<'signin' | 'signup' | 'forgot' | 'onboarding'>(initialMode);
+
+  // Sync mode with route changes
+  React.useEffect(() => {
+    setMode(initialMode);
+  }, [initialMode]);
+
+  // Sync document SEO metadata
+  React.useEffect(() => {
+    updatePageSeo(path);
+  }, [path]);
 
   // Sign In State
   const [email, setEmail] = useState('');
@@ -107,6 +121,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'signin' }
         setSuccessMsg(`Welcome, ${res.user.name}! Authenticated via Google.`);
         setTimeout(() => {
           handleAuthSuccess(res.user, res.business);
+          navigate(getSafeReturnUrl());
         }, 600);
       }
     } catch (err: any) {
@@ -126,10 +141,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'signin' }
         setSuccessMsg(`Welcome back, ${res.user.name}!`);
         setTimeout(() => {
           handleAuthSuccess(res.user, res.business);
+          navigate(getSafeReturnUrl());
         }, 500);
       } else {
         // Fallback for offline or local session
         handleAuthSuccess(user, business);
+        navigate(getSafeReturnUrl());
       }
     } catch (err: any) {
       setError(err?.message || 'Failed to authenticate session.');
@@ -153,6 +170,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'signin' }
         setSuccessMsg(`Welcome back, ${res.user.name}!`);
         setTimeout(() => {
           handleAuthSuccess(res.user, res.business);
+          navigate(getSafeReturnUrl());
         }, 600);
       }
     } catch (err: any) {
@@ -255,6 +273,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'signin' }
         setSuccessMsg(`Workspace ready! Welcome to your new BizFlow dashboard.`);
         setTimeout(() => {
           handleAuthSuccess(res.user, res.business);
+          navigate(getSafeReturnUrl());
         }, 800);
       }
     } catch (err: any) {
@@ -335,13 +354,24 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'signin' }
 
       <div className="relative z-10 w-full max-w-md">
         {/* BizFlow Header Branding */}
-        <div className="text-center mb-6 space-y-2">
+        <div className="text-center mb-5 space-y-2">
           <div className="flex justify-center">
             <BizFlowLogo size="xl" showWordmark />
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
             Smart, simple business management &amp; POS for growing enterprises
           </p>
+
+          {/* Unobtrusive return link to public marketing website */}
+          <div className="pt-1">
+            <Link
+              to="/"
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#4C0196] dark:text-purple-400 hover:underline transition-colors"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Back to BizFlow Homepage</span>
+            </Link>
+          </div>
         </div>
 
         {/* Main Card */}
@@ -354,6 +384,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'signin' }
                   type="button"
                   onClick={() => {
                     setMode('signin');
+                    navigate('/login', { replace: true });
                     setError(null);
                     setSuccessMsg(null);
                   }}
@@ -370,6 +401,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'signin' }
                   type="button"
                   onClick={() => {
                     setMode('signup');
+                    navigate('/register', { replace: true });
                     setError(null);
                     setSuccessMsg(null);
                   }}
@@ -475,6 +507,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'signin' }
                         type="button"
                         onClick={() => {
                           setMode('forgot');
+                          navigate('/forgot-password', { replace: true });
                           setError(null);
                           setSuccessMsg(null);
                         }}
@@ -890,6 +923,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'signin' }
                     type="button"
                     onClick={() => {
                       setMode('signin');
+                      navigate('/login', { replace: true });
                       setError(null);
                       setSuccessMsg(null);
                     }}

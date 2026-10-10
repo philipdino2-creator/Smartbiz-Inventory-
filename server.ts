@@ -1717,15 +1717,261 @@ app.post('/api/debt-payments', requireAuth, async (req: AuthRequest, res: Respon
 });
 
 // ==========================================
-// 9. RECURRING EXPENSES
+// 9. RECURRING EXPENSES & SUBSCRIPTIONS
 // ==========================================
 
+// Read authoritative recurring expenses for authenticated business
 app.get('/api/recurring-expenses', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const list = await db.select().from(schema.recurringExpenses).where(eq(schema.recurringExpenses.businessId, req.businessId!)).orderBy(desc(schema.recurringExpenses.updatedAt));
-    res.json(list.map(r => ({ ...r, amount: Number(r.amount) })));
-  } catch (err) {
+    const list = await db
+      .select()
+      .from(schema.recurringExpenses)
+      .where(eq(schema.recurringExpenses.businessId, req.businessId!))
+      .orderBy(desc(schema.recurringExpenses.updatedAt));
+
+    res.json(
+      list.map(r => ({
+        ...r,
+        amount: Number(r.amount),
+        generatedExpenseIds: Array.isArray(r.generatedExpenseIds) ? r.generatedExpenseIds : [],
+      }))
+    );
+  } catch (err: any) {
+    console.error('Failed to load recurring expenses from PostgreSQL:', err?.message);
     res.status(500).json({ error: 'Failed to load recurring expenses' });
+  }
+});
+
+// Create new recurring expense schedule in PostgreSQL
+app.post('/api/recurring-expenses', requireAuth, requirePermission('manage_recurring_expenses'), async (req: AuthRequest, res: Response) => {
+  const data = req.body;
+  const numAmount = Number(data.amount);
+  if (!numAmount || numAmount <= 0) {
+    res.status(400).json({ error: 'A positive expense amount is required' });
+    return;
+  }
+  if (!data.description || !data.description.trim()) {
+    res.status(400).json({ error: 'Description is required' });
+    return;
+  }
+  if (!data.category || !data.category.trim()) {
+    res.status(400).json({ error: 'Category is required' });
+    return;
+  }
+  if (!data.nextDueDate) {
+    res.status(400).json({ error: 'Next due date is required' });
+    return;
+  }
+
+  const validFrequencies = ['daily', 'weekly', 'biweekly', 'monthly', 'quarterly', 'yearly'];
+  const frequency = validFrequencies.includes(data.frequency) ? data.frequency : 'monthly';
+
+  try {
+    const id = data.id || `rec_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const now = new Date().toISOString();
+
+    // Check if ID already exists for this business
+    const existing = await db
+      .select()
+      .from(schema.recurringExpenses)
+      .where(and(eq(schema.recurringExpenses.id, id), eq(schema.recurringExpenses.businessId, req.businessId!)))
+      .limit(1);
+
+    if (existing.length > 0) {
+      res.status(409).json({ error: 'Recurring expense schedule with this ID already exists' });
+      return;
+    }
+
+    await db.insert(schema.recurringExpenses).values({
+      id,
+      businessId: req.businessId!,
+      category: data.category.trim(),
+      description: data.description.trim(),
+      amount: String(numAmount),
+      frequency,
+      paymentMethod: data.paymentMethod || 'Bank Transfer',
+      vendorName: data.vendorName ? data.vendorName.trim() : 'General Vendor',
+      nextDueDate: data.nextDueDate,
+      status: (data.status === 'paused' || data.status === 'cancelled') ? data.status : 'active',
+      autoRecord: Boolean(data.autoRecord),
+      notes: data.notes ? data.notes.trim() : null,
+      lastGeneratedDate: data.lastGeneratedDate || null,
+      generatedExpenseIds: Array.isArray(data.generatedExpenseIds) ? data.generatedExpenseIds : [],
+      createdByUserId: req.user!.id,
+      createdByUserName: req.user!.name,
+      createdAt: data.createdAt || now,
+      updatedAt: data.updatedAt || now,
+    });
+
+    await logServerAudit(
+      req.businessId!,
+      req.user!.id,
+      req.user!.name,
+      req.user!.role,
+      'create',
+      'expense',
+      id,
+      `Created recurring expense schedule: ${data.description.trim()} (₦${numAmount.toLocaleString()} ${frequency})`
+    );
+
+    res.status(201).json({
+      success: true,
+      id,
+      recurringExpense: {
+        id,
+        businessId: req.businessId!,
+        category: data.category.trim(),
+        description: data.description.trim(),
+        amount: numAmount,
+        frequency,
+        paymentMethod: data.paymentMethod || 'Bank Transfer',
+        vendorName: data.vendorName ? data.vendorName.trim() : 'General Vendor',
+        nextDueDate: data.nextDueDate,
+        startDate: data.startDate || data.nextDueDate,
+        endDate: data.endDate || undefined,
+        status: (data.status === 'paused' || data.status === 'cancelled') ? data.status : 'active',
+        autoRecord: Boolean(data.autoRecord),
+        notes: data.notes ? data.notes.trim() : undefined,
+        lastGeneratedDate: data.lastGeneratedDate || undefined,
+        generatedExpenseIds: Array.isArray(data.generatedExpenseIds) ? data.generatedExpenseIds : [],
+        createdByUserId: req.user!.id,
+        createdByUserName: req.user!.name,
+        createdAt: data.createdAt || now,
+        updatedAt: data.updatedAt || now,
+      },
+    });
+  } catch (err: any) {
+    console.error('Failed to create recurring expense in PostgreSQL:', err?.message);
+    res.status(500).json({ error: 'Failed to create recurring expense schedule' });
+  }
+});
+
+// Update recurring expense schedule in PostgreSQL
+app.put('/api/recurring-expenses/:id', requireAuth, requirePermission('manage_recurring_expenses'), async (req: AuthRequest, res: Response) => {
+  const id = req.params.id;
+  const data = req.body;
+
+  try {
+    const existing = await db
+      .select()
+      .from(schema.recurringExpenses)
+      .where(and(eq(schema.recurringExpenses.id, id), eq(schema.recurringExpenses.businessId, req.businessId!)))
+      .limit(1);
+
+    if (existing.length === 0) {
+      res.status(404).json({ error: 'Recurring expense schedule not found or not owned by your business' });
+      return;
+    }
+
+    const rec = existing[0];
+    const updatePayload: Record<string, any> = {
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (data.description !== undefined && data.description.trim()) {
+      updatePayload.description = data.description.trim();
+    }
+    if (data.category !== undefined && data.category.trim()) {
+      updatePayload.category = data.category.trim();
+    }
+    if (data.amount !== undefined) {
+      const numAmount = Number(data.amount);
+      if (numAmount > 0) {
+        updatePayload.amount = String(numAmount);
+      }
+    }
+    if (data.frequency !== undefined) {
+      const validFrequencies = ['daily', 'weekly', 'biweekly', 'monthly', 'quarterly', 'yearly'];
+      if (validFrequencies.includes(data.frequency)) {
+        updatePayload.frequency = data.frequency;
+      }
+    }
+    if (data.paymentMethod !== undefined) {
+      updatePayload.paymentMethod = data.paymentMethod;
+    }
+    if (data.vendorName !== undefined) {
+      updatePayload.vendorName = data.vendorName.trim();
+    }
+    if (data.nextDueDate !== undefined) {
+      updatePayload.nextDueDate = data.nextDueDate;
+    }
+    if (data.status !== undefined) {
+      if (['active', 'paused', 'cancelled'].includes(data.status)) {
+        updatePayload.status = data.status;
+      }
+    }
+    if (data.autoRecord !== undefined) {
+      updatePayload.autoRecord = Boolean(data.autoRecord);
+    }
+    if (data.notes !== undefined) {
+      updatePayload.notes = data.notes ? data.notes.trim() : null;
+    }
+    if (data.lastGeneratedDate !== undefined) {
+      updatePayload.lastGeneratedDate = data.lastGeneratedDate;
+    }
+    if (data.generatedExpenseIds !== undefined && Array.isArray(data.generatedExpenseIds)) {
+      updatePayload.generatedExpenseIds = data.generatedExpenseIds;
+    }
+
+    await db
+      .update(schema.recurringExpenses)
+      .set(updatePayload)
+      .where(and(eq(schema.recurringExpenses.id, id), eq(schema.recurringExpenses.businessId, req.businessId!)));
+
+    await logServerAudit(
+      req.businessId!,
+      req.user!.id,
+      req.user!.name,
+      req.user!.role,
+      'update',
+      'expense',
+      id,
+      `Updated recurring expense schedule: ${updatePayload.description || rec.description}`
+    );
+
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error('Failed to update recurring expense in PostgreSQL:', err?.message);
+    res.status(500).json({ error: 'Failed to update recurring expense schedule' });
+  }
+});
+
+// Delete recurring expense schedule in PostgreSQL
+app.delete('/api/recurring-expenses/:id', requireAuth, requirePermission('manage_recurring_expenses'), async (req: AuthRequest, res: Response) => {
+  const id = req.params.id;
+
+  try {
+    const existing = await db
+      .select()
+      .from(schema.recurringExpenses)
+      .where(and(eq(schema.recurringExpenses.id, id), eq(schema.recurringExpenses.businessId, req.businessId!)))
+      .limit(1);
+
+    if (existing.length === 0) {
+      res.status(404).json({ error: 'Recurring expense schedule not found or not owned by your business' });
+      return;
+    }
+
+    const rec = existing[0];
+    await db
+      .delete(schema.recurringExpenses)
+      .where(and(eq(schema.recurringExpenses.id, id), eq(schema.recurringExpenses.businessId, req.businessId!)));
+
+    await logServerAudit(
+      req.businessId!,
+      req.user!.id,
+      req.user!.name,
+      req.user!.role,
+      'delete',
+      'expense',
+      id,
+      `Deleted recurring schedule: ${rec.description}`
+    );
+
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error('Failed to delete recurring expense in PostgreSQL:', err?.message);
+    res.status(500).json({ error: 'Failed to delete recurring expense schedule' });
   }
 });
 
@@ -2057,7 +2303,7 @@ app.post('/api/audit-logs', requireAuth, async (req: AuthRequest, res: Response)
 // ==========================================
 
 app.post('/api/migrate/import-localstorage', requireAuth, requirePermission('manage_business'), async (req: AuthRequest, res: Response) => {
-  const { customers, products, sales, expenses } = req.body;
+  const { customers, products, sales, expenses, recurringExpenses } = req.body;
   let importedCount = 0;
 
   try {
@@ -2184,6 +2430,36 @@ app.post('/api/migrate/import-localstorage', requireAuth, requirePermission('man
               recordedByUserName: e.recordedByUserName || req.user!.name,
               createdAt: e.createdAt || new Date().toISOString(),
               updatedAt: e.updatedAt || new Date().toISOString(),
+            });
+            importedCount++;
+          }
+        }
+      }
+
+      // 5. Recurring Expenses
+      if (Array.isArray(recurringExpenses)) {
+        for (const r of recurringExpenses) {
+          const exists = await tx.select().from(schema.recurringExpenses).where(eq(schema.recurringExpenses.id, r.id)).limit(1);
+          if (exists.length === 0) {
+            await tx.insert(schema.recurringExpenses).values({
+              id: r.id,
+              businessId: req.businessId!,
+              category: r.category,
+              description: r.description,
+              amount: String(r.amount || 0),
+              frequency: r.frequency,
+              paymentMethod: r.paymentMethod,
+              vendorName: r.vendorName,
+              nextDueDate: r.nextDueDate,
+              status: r.status || 'active',
+              autoRecord: Boolean(r.autoRecord),
+              notes: r.notes || null,
+              lastGeneratedDate: r.lastGeneratedDate || null,
+              generatedExpenseIds: Array.isArray(r.generatedExpenseIds) ? r.generatedExpenseIds : [],
+              createdByUserId: r.createdByUserId || req.user!.id,
+              createdByUserName: r.createdByUserName || req.user!.name,
+              createdAt: r.createdAt || new Date().toISOString(),
+              updatedAt: r.updatedAt || new Date().toISOString(),
             });
             importedCount++;
           }

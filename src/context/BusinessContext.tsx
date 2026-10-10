@@ -261,9 +261,15 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [recurringExpenses, setRecurringExpenses] = useState<RecurringExpense[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.RECURRING_EXPENSES);
-      return saved ? JSON.parse(saved) : INITIAL_RECURRING_EXPENSES;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+      // If user has an active session token (authenticated user / real tenant),
+      // NEVER introduce hardcoded demo bills as initial fallback.
+      return api.getToken() ? [] : INITIAL_RECURRING_EXPENSES;
     } catch {
-      return INITIAL_RECURRING_EXPENSES;
+      return api.getToken() ? [] : INITIAL_RECURRING_EXPENSES;
     }
   });
 
@@ -447,6 +453,15 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     api.setToken(null);
     try {
       localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_ID);
+      localStorage.removeItem(STORAGE_KEYS.RECURRING_EXPENSES);
+      localStorage.removeItem(STORAGE_KEYS.SALES);
+      localStorage.removeItem(STORAGE_KEYS.EXPENSES);
+      localStorage.removeItem(STORAGE_KEYS.CUSTOMERS);
+      localStorage.removeItem(STORAGE_KEYS.PRODUCTS);
+      localStorage.removeItem(STORAGE_KEYS.PAYABLES);
+      localStorage.removeItem(STORAGE_KEYS.AUDIT_LOGS);
+      localStorage.removeItem(STORAGE_KEYS.DEBT_PAYMENTS);
+      localStorage.removeItem(STORAGE_KEYS.RECONCILIATIONS);
     } catch {}
     setIsAuthenticated(false);
   };
@@ -456,6 +471,10 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setCurrentUserId(authUser.id);
     if (authBusiness) {
       setBusiness(authBusiness);
+      // If logging into a real independent business, ensure no un-isolated demo recurring expenses remain
+      if (authBusiness.id !== INITIAL_BUSINESS.id) {
+        setRecurringExpenses([]);
+      }
     }
     setUsers(prev => (prev.some(u => u.id === authUser.id) ? prev.map(u => (u.id === authUser.id ? authUser : u)) : [authUser, ...prev]));
     fetchAllServerData();
@@ -949,12 +968,12 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const now = new Date();
     const newRec: RecurringExpense = {
       ...data,
-      id: `rec_${Date.now()}`,
+      id: data.id || `rec_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       businessId: business.id,
-      status: 'active',
-      generatedExpenseIds: [],
-      createdAt: now.toISOString(),
-      updatedAt: now.toISOString(),
+      status: data.status || 'active',
+      generatedExpenseIds: data.generatedExpenseIds || [],
+      createdAt: data.createdAt || now.toISOString(),
+      updatedAt: data.updatedAt || now.toISOString(),
       createdByUserId: currentUser.id,
       createdByUserName: currentUser.name,
     };
@@ -965,6 +984,11 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       newRec.id,
       `Created recurring expense template: ${newRec.description} (${business.currencySymbol}${newRec.amount.toLocaleString()} ${newRec.frequency})`
     );
+
+    api.createRecurringExpense(newRec).catch(err => {
+      console.warn('Server recurring expense sync:', err?.message);
+    });
+
     return newRec;
   };
 
@@ -979,10 +1003,14 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         return r;
       })
     );
+
+    api.updateRecurringExpense(id, data).catch(err => {
+      console.warn('Server recurring expense update sync:', err?.message);
+    });
   };
 
   const deleteRecurringExpense = (id: string): boolean => {
-    if (currentUser.role === 'staff') {
+    if (currentUser.role === 'staff' && !hasPermission('manage_recurring_expenses')) {
       alert('Permission Denied: Staff members cannot delete recurring expense schedules.');
       return false;
     }
@@ -990,6 +1018,12 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (!rec) return false;
     setRecurringExpenses(prev => prev.filter(r => r.id !== id));
     addAuditLog('delete', 'expense', id, `Deleted recurring schedule: ${rec.description}`);
+
+    api.deleteRecurringExpense(id).catch(err => {
+      console.warn('Server recurring expense delete sync:', err?.message);
+      fetchAllServerData();
+    });
+
     return true;
   };
 
@@ -1698,6 +1732,7 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         products,
         sales,
         expenses,
+        recurringExpenses,
       };
       const res = await api.importLocalStorageData(payload);
       await fetchAllServerData();

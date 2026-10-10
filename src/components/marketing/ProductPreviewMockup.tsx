@@ -36,7 +36,9 @@ export const ProductPreviewMockup: React.FC = () => {
           <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-950/60 text-[#4C0196] dark:text-purple-300 border border-purple-200 dark:border-purple-800">
             Interactive Product Preview
           </span>
-          <span className="text-[10px] text-slate-400 hidden md:inline">Sample Data</span>
+          <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400 bg-slate-200/70 dark:bg-slate-700/70 px-2 py-0.5 rounded-full">
+            Sample Data
+          </span>
         </div>
       </div>
 

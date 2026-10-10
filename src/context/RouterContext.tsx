@@ -6,12 +6,14 @@ export type AppRoute = '/app' | '/app/dashboard' | '/app/sales' | '/app/expenses
 
 export type AppPath = PublicRoute | AuthRoute | AppRoute | string;
 
-interface RouterContextType {
+export interface RouterContextType {
   path: string;
+  search: string;
   navigate: (to: string, options?: { replace?: boolean }) => void;
   isPublicRoute: boolean;
   isAuthRoute: boolean;
   isAppRoute: boolean;
+  getSafeReturnUrl: () => string;
 }
 
 const RouterContext = createContext<RouterContextType | null>(null);
@@ -25,12 +27,51 @@ function normalizePath(pathname: string): string {
   return pathname;
 }
 
+function parseUrl(to: string): { pathname: string; search: string } {
+  const [pathnameRaw, ...rest] = to.split('?');
+  const searchRaw = rest.join('?');
+  const normalizedPath = normalizePath(pathnameRaw);
+  return {
+    pathname: normalizedPath,
+    search: searchRaw ? `?${searchRaw}` : '',
+  };
+}
+
+export function getSafeReturnUrl(): string {
+  if (typeof window === 'undefined') return '/app';
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const returnTo = params.get('returnTo');
+    // Enforce strict local /app prefix and block open redirect exploits
+    if (
+      returnTo &&
+      returnTo.startsWith('/app') &&
+      !returnTo.startsWith('//') &&
+      !returnTo.includes('\\') &&
+      !returnTo.includes('\r') &&
+      !returnTo.includes('\n')
+    ) {
+      return returnTo;
+    }
+  } catch {
+    // fallback
+  }
+  return '/app';
+}
+
 export const RouterProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [path, setPath] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       return normalizePath(window.location.pathname);
     }
     return '/';
+  });
+
+  const [search, setSearch] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return window.location.search || '';
+    }
+    return '';
   });
 
   const navigate = useCallback((to: string, options?: { replace?: boolean }) => {
@@ -45,19 +86,23 @@ export const RouterProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       return;
     }
 
-    const normalized = normalizePath(to);
+    const { pathname: normalized, search: newSearch } = parseUrl(to);
+    const fullUrl = normalized + newSearch;
+
     if (options?.replace) {
-      window.history.replaceState({}, '', normalized);
+      window.history.replaceState({}, '', fullUrl);
     } else {
-      window.history.pushState({}, '', normalized);
+      window.history.pushState({}, '', fullUrl);
     }
     setPath(normalized);
+    setSearch(newSearch);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
 
   useEffect(() => {
     const handlePopState = () => {
       setPath(normalizePath(window.location.pathname));
+      setSearch(window.location.search || '');
     };
 
     window.addEventListener('popstate', handlePopState);
@@ -66,10 +111,20 @@ export const RouterProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   const isPublicRoute = ['/', '/features', '/how-it-works', '/pricing', '/faq'].includes(path);
   const isAuthRoute = ['/login', '/register', '/signup', '/forgot-password'].includes(path);
-  const isAppRoute = path.startsWith('/app');
+  const isAppRoute = path === '/app' || path.startsWith('/app/');
 
   return (
-    <RouterContext.Provider value={{ path, navigate, isPublicRoute, isAuthRoute, isAppRoute }}>
+    <RouterContext.Provider
+      value={{
+        path,
+        search,
+        navigate,
+        isPublicRoute,
+        isAuthRoute,
+        isAppRoute,
+        getSafeReturnUrl,
+      }}
+    >
       {children}
     </RouterContext.Provider>
   );

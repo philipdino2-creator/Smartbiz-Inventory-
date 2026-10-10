@@ -297,6 +297,26 @@ class ApiService {
     return this.request<RecurringExpense[]>('/api/recurring-expenses');
   }
 
+  async createRecurringExpense(data: Partial<RecurringExpense>): Promise<{ success: boolean; id?: string; recurringExpense?: RecurringExpense }> {
+    return this.request('/api/recurring-expenses', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateRecurringExpense(id: string, data: Partial<RecurringExpense>): Promise<{ success: boolean }> {
+    return this.request(`/api/recurring-expenses/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteRecurringExpense(id: string): Promise<{ success: boolean }> {
+    return this.request(`/api/recurring-expenses/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
   // RECONCILIATION
   async getReconciliations(): Promise<DailyReconciliation[]> {
     return this.request<DailyReconciliation[]>('/api/reconciliation');
@@ -350,7 +370,7 @@ class ApiService {
   }
 
   // MIGRATION
-  async importLocalStorageData(payload: { customers?: any[]; products?: any[]; sales?: any[]; expenses?: any[] }): Promise<{ success: boolean; importedCount: number; message: string }> {
+  async importLocalStorageData(payload: { customers?: any[]; products?: any[]; sales?: any[]; expenses?: any[]; recurringExpenses?: any[] }): Promise<{ success: boolean; importedCount: number; message: string }> {
     return this.request('/api/migrate/import-localstorage', {
       method: 'POST',
       body: JSON.stringify(payload),
