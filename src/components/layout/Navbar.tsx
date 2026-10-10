@@ -1,6 +1,6 @@
 import React from 'react';
 import { useBusiness } from '../../context/BusinessContext';
-import { PlusCircle, MinusCircle, UserCheck, Search, Users, LogOut } from 'lucide-react';
+import { PlusCircle, MinusCircle, UserCheck, Search, Users, LogOut, Zap } from 'lucide-react';
 import { BizFlowLogo } from '../common/BizFlowLogo';
 import { ThemeToggle } from '../common/ThemeToggle';
 
@@ -32,6 +32,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     { id: 'expenses', label: 'Expenses' },
     { id: 'customers', label: 'Customers' },
     { id: 'reports', label: 'Reports' },
+    { id: 'plan', label: 'Plan & Usage' },
     { id: 'settings', label: 'Settings' },
   ];
 

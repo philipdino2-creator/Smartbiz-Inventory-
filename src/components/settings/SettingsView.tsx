@@ -23,6 +23,7 @@ import {
   History,
   Building2,
   CreditCard,
+  Zap,
   Sliders,
   Check,
   X,
@@ -40,6 +41,7 @@ import {
   LogOut,
 } from 'lucide-react';
 import { BizFlowLogo } from '../common/BizFlowLogo';
+import { UsagePlanView } from '../plan/UsagePlanView';
 import { ThemeToggle } from '../common/ThemeToggle';
 
 export const SettingsView: React.FC = () => {
@@ -70,7 +72,7 @@ export const SettingsView: React.FC = () => {
   const [migrationStatus, setMigrationStatus] = useState<string | null>(null);
 
   // Active settings tab
-  const [activeTab, setActiveTab] = useState<'profile' | 'appearance' | 'permissions' | 'categories' | 'audit'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'usage' | 'appearance' | 'permissions' | 'categories' | 'audit'>('profile');
 
   // Business profile form state
   const [name, setName] = useState(business.name);
@@ -501,6 +503,17 @@ export const SettingsView: React.FC = () => {
         </button>
 
         <button
+          onClick={() => setActiveTab('usage')}
+          className={`py-3 px-3 border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+            activeTab === 'usage'
+              ? 'border-[#4C0196] text-[#4C0196] dark:border-purple-400 dark:text-purple-400 font-bold'
+              : 'border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
+          }`}
+        >
+          <Zap className="w-4 h-4 text-amber-500" />
+          <span>Usage &amp; Plan Quotas</span>
+        </button>
+        <button
           onClick={() => setActiveTab('appearance')}
           className={`py-3 px-3 border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
             activeTab === 'appearance'
@@ -548,6 +561,11 @@ export const SettingsView: React.FC = () => {
           <span>Security Audit Log</span>
         </button>
       </div>
+
+      {/* TAB: Usage & Plan Quotas */}
+      {activeTab === 'usage' && (
+        <UsagePlanView />
+      )}
 
       {/* TAB 1: Business Profile & Bank Details */}
       {activeTab === 'profile' && (

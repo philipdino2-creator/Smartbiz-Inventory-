@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, Rea
 
 export type PublicRoute = '/' | '/features' | '/how-it-works' | '/pricing' | '/faq';
 export type AuthRoute = '/login' | '/register' | '/signup' | '/forgot-password';
-export type AppRoute = '/app' | '/app/dashboard' | '/app/sales' | '/app/expenses' | '/app/products' | '/app/customers' | '/app/reports' | '/app/settings';
+export type AppRoute = '/app' | '/app/dashboard' | '/app/sales' | '/app/expenses' | '/app/products' | '/app/customers' | '/app/reports' | '/app/settings' | '/app/plan';
 
 export type AppPath = PublicRoute | AuthRoute | AppRoute | string;
 

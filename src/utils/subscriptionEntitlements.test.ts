@@ -15,6 +15,7 @@ import {
   checkPlanLimit,
   checkFeatureEntitlement,
   getFullSubscriptionStatus,
+  getCurrentMonthDateRange,
 } from '../services/subscriptionService.ts';
 import { activePaymentProvider } from '../services/paymentProvider.ts';
 import { PlanId } from '../types/subscription.ts';
@@ -540,6 +541,30 @@ export async function runSubscriptionEntitlementsTests(): Promise<{
       finalSales.length === 50,
       "Concurrent Plan Limit Race-Condition Prevention",
       "Two simultaneous creation requests cannot exceed plan limits; FOR UPDATE serialization admits exactly one and rejects the second with PLAN_LIMIT_REACHED"
+    );
+
+    // =========================================================================
+    // Test 15: Plan & Usage Dashboard Entitlements & Metric Accuracy
+    // =========================================================================
+    const dashboardStatus = await getFullSubscriptionStatus(testBizId);
+    const dateRange = getCurrentMonthDateRange();
+
+    const dashboardMetricsValid =
+      dashboardStatus.subscription.businessId === testBizId &&
+      dashboardStatus.plan.id === "free" &&
+      dashboardStatus.usage.billingCycleMonth === dateRange.cycleKey &&
+      dashboardStatus.limits.monthlySales.current === 50 &&
+      dashboardStatus.limits.monthlySales.max === 50 &&
+      dashboardStatus.limits.monthlySales.isAtLimit === true &&
+      dashboardStatus.limits.monthlyExpenses.max === 50 &&
+      dashboardStatus.limits.customers.max === 30 &&
+      dashboardStatus.limits.products.max === 25 &&
+      dashboardStatus.limits.users.max === 1;
+
+    assert(
+      dashboardMetricsValid,
+      "Plan & Usage Dashboard Metric Accuracy",
+      "Full subscription status accurately returns tenant-scoped usage metrics, authoritative limits, and limit flags"
     );
 
     // =========================================================================

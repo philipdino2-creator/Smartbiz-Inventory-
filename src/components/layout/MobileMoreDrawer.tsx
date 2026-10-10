@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   X,
+  Zap,
   CreditCard,
   Package,
   BookOpen,
@@ -66,6 +67,12 @@ export const MobileMoreDrawer: React.FC<MobileMoreDrawerProps> = ({
       label: 'Complete Cash Ledger',
       desc: 'Chronological double-entry cash flow journal & audit',
       icon: BookOpen,
+    },
+    {
+      id: 'plan',
+      label: 'Usage & Plan Quotas',
+      desc: 'Active plan tier, sales and expense usage, and remaining allowances',
+      icon: Zap,
     },
     {
       id: 'settings',

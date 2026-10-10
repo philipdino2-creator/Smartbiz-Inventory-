@@ -12,6 +12,8 @@ import { ProductsView } from './components/products/ProductsView';
 import { LedgerView } from './components/ledger/LedgerView';
 import { ReportsView } from './components/reports/ReportsView';
 import { SettingsView } from './components/settings/SettingsView';
+import { UsagePlanView } from './components/plan/UsagePlanView';
+
 import { RecurringExpensesView } from './components/expenses/RecurringExpensesView';
 
 // Modals
@@ -48,6 +50,7 @@ const getSubTabFromPath = (pathname: string): string => {
         'ledger',
         'reports',
         'settings',
+        'plan',
       ].includes(sub)
     ) {
       return sub;
@@ -327,6 +330,7 @@ const AppContent: React.FC = () => {
         {activeTab === 'reports' && <ReportsView />}
 
         {activeTab === 'settings' && <SettingsView />}
+        {activeTab === 'plan' && <UsagePlanView />}
       </main>
 
       {/* Mobile Floating Action Button (FAB) for Instant 1-Tap Entry on Phones */}

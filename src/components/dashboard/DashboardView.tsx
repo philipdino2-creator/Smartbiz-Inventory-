@@ -19,6 +19,8 @@ import {
   Receipt,
   ArrowRight,
   Phone,
+  Zap,
+  ExternalLink,
 } from 'lucide-react';
 import { Sale, Customer, Payable } from '../../types';
 
@@ -190,6 +192,33 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span>+ New Sale</span>
           </button>
         </div>
+      </div>
+
+      {/* Plan & Usage Summary Strip */}
+      <div className="bg-gradient-to-r from-purple-50 to-indigo-50 dark:from-purple-950/40 dark:to-indigo-950/30 p-4 rounded-2xl border border-purple-200 dark:border-purple-800/60 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="p-2 rounded-xl bg-[#4C0196] text-white shadow-xs shrink-0">
+            <Zap className="w-4 h-4 text-amber-300" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-900 dark:text-white">Workspace Plan:</span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-white dark:bg-slate-800 text-[#4C0196] dark:text-purple-300 border border-purple-200 dark:border-purple-800">
+                Active Tier
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5">
+              Track live monthly sales, expenses, and catalog usage against plan allowances
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={() => setActiveTab('plan')}
+          className="self-start sm:self-center flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-[#4C0196] dark:text-purple-300 bg-white dark:bg-slate-800 hover:bg-purple-50 dark:hover:bg-slate-700 border border-purple-200 dark:border-purple-700 shadow-2xs transition-colors cursor-pointer"
+        >
+          <span>View Usage &amp; Plan</span>
+          <ArrowRight className="w-3.5 h-3.5" />
+        </button>
       </div>
 
       {/* 2. CORE MVP BUSINESS INDICATORS (Clear Visual Hierarchy: 4-5 focused metrics) */}
