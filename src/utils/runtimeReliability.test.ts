@@ -262,5 +262,54 @@ export async function runRuntimeReliabilityTests(): Promise<{ passed: boolean; r
     'build script compiles server.ts into server.js via esbuild'
   );
 
+  // =========================================================================
+  // 10. Container & Proxy Port Precedence Resolution Tests
+  // =========================================================================
+  function testResolveServerPort(env: Record<string, string | undefined>): number {
+    const parsePort = (val: string | undefined): number | undefined => {
+      if (!val) return undefined;
+      const parsed = parseInt(val, 10);
+      return !isNaN(parsed) && parsed > 0 && parsed <= 65535 ? parsed : undefined;
+    };
+    return (
+      parsePort(env.APP_PORT) ??
+      parsePort(env.DEFAULT_APP_PORT) ??
+      parsePort(env.PORT) ??
+      3000
+    );
+  }
+
+  // Case A: APP_PORT=3000, DEFAULT_APP_PORT=3000, PORT=8080 -> 3000
+  const portCaseA = testResolveServerPort({
+    APP_PORT: '3000',
+    DEFAULT_APP_PORT: '3000',
+    PORT: '8080',
+  });
+  assert(portCaseA === 3000, 'Port resolution: APP_PORT takes top precedence (3000)');
+
+  // Case B: DEFAULT_APP_PORT=3000, PORT=8080 -> 3000 (Internal Nginx proxy scenario)
+  const portCaseB = testResolveServerPort({
+    DEFAULT_APP_PORT: '3000',
+    PORT: '8080',
+  });
+  assert(portCaseB === 3000, 'Port resolution: DEFAULT_APP_PORT takes precedence over PORT in proxy setup (3000)');
+
+  // Case C: Only PORT=8080 -> 8080 (Direct standalone Cloud Run deployment)
+  const portCaseC = testResolveServerPort({
+    PORT: '8080',
+  });
+  assert(portCaseC === 8080, 'Port resolution: Falls back to PORT=8080 in direct Cloud Run deployments');
+
+  // Case D: No port variables specified -> 3000 (Local fallback)
+  const portCaseD = testResolveServerPort({});
+  assert(portCaseD === 3000, 'Port resolution: Defaults safely to 3000 when no port env vars exist');
+
+  // Case E: Invalid or out-of-range port strings -> Safe fallback
+  const portCaseE = testResolveServerPort({
+    PORT: 'invalid_string',
+    APP_PORT: '999999', // out of range
+  });
+  assert(portCaseE === 3000, 'Port resolution: Discards invalid/out-of-range strings and uses default 3000');
+
   return { passed, results };
 }

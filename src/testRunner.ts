@@ -1,3 +1,4 @@
+import { runPaymentServiceWebhookTests } from './utils/paymentServiceWebhook.test';
 import { runCalculationTests } from './utils/calculations.test';
 import { runOperationalPolishTests } from './utils/operationalPolish.test';
 import { runBackendRemediationTests } from './utils/backendRemediation.test';
@@ -8,6 +9,7 @@ import { runAuthFlowVerificationTests } from './utils/authFlowVerification.test'
 import { runMarketingRoutingTests } from './utils/marketingRouting.test';
 import { runRecurringExpensesPersistenceTests } from './utils/recurringExpensesPersistence.test';
 import { runSubscriptionEntitlementsTests } from './utils/subscriptionEntitlements.test';
+import { runPaymentFoundationTests } from './utils/paymentFoundation.test';
 
 async function runAllTests() {
   console.log('====================================================');
@@ -59,6 +61,11 @@ async function runAllTests() {
   recurringResult.results.forEach(r => console.log('  ' + r));
   console.log(`Recurring Expenses Persistence Result: ${recurringResult.passed ? 'ALL PASSED' : 'SOME FAILED'}\n`);
 
+  console.log('>>> [11/11] Running Payment Foundation, Idempotency & Schema Integrity Tests...');
+  const payFoundResult = await runPaymentFoundationTests();
+  payFoundResult.results.forEach(r => console.log('  ' + r));
+  console.log();
+
   console.log('>>> [10/10] Running Pricing, Plan Entitlements & Subscription Readiness Tests...');
   const subscriptionResult = await runSubscriptionEntitlementsTests();
   subscriptionResult.results.forEach(r => console.log('  ' + r));
@@ -78,6 +85,11 @@ async function runAllTests() {
     console.log(`  [Subscription Entitlements] ${k}: ${v}`);
   });
   console.log('-----------------------------------------------------------\n');
+
+    console.log('>>> [12/12] Running Payment Service, Webhook Ingestion & State Machine Tests...');
+  const payWebhookResult = await runPaymentServiceWebhookTests();
+  payWebhookResult.results.forEach(r => console.log('  ' + r));
+  console.log(`Payment Service & Webhook Result: ${payWebhookResult.passed ? 'ALL PASSED' : 'SOME FAILED'}\n`);
 
   const overallPassed =
     calcResult.passed &&

@@ -205,7 +205,24 @@ const AppContent: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  // Route redirects must run in an effect unconditionally at the top of the component to obey the Rules of Hooks
+  React.useEffect(() => {
+    if (isAuthChecking || showSplash) return;
+
+    if (isAuthRoute && isAuthenticated) {
+      navigate(getSafeReturnUrl(), { replace: true });
+    } else if (isAppRoute && !isAuthenticated) {
+      const safeReturn = encodeURIComponent(path);
+      navigate(`/login?returnTo=${safeReturn}`, { replace: true });
+    } else if (!isPublicRoute && !isAuthRoute && !isAppRoute) {
+      if (isAuthenticated) {
+        navigate('/app', { replace: true });
+      }
+    }
+  }, [isAuthChecking, showSplash, isAuthRoute, isAuthenticated, isAppRoute, isPublicRoute, path, navigate, getSafeReturnUrl]);
+
   // During initial auth session verification or startup splash, show clean splash screen
+  // ALL hooks must be called BEFORE this return!
   if (isAuthChecking || showSplash) {
     return <SplashScreen businessName="BizFlow" />;
   }
@@ -218,7 +235,6 @@ const AppContent: React.FC = () => {
   // 2. AUTHENTICATION PAGES (/login, /register, /signup, /forgot-password)
   if (isAuthRoute) {
     if (isAuthenticated) {
-      navigate(getSafeReturnUrl(), { replace: true });
       return null;
     }
     const initialMode =
@@ -233,8 +249,6 @@ const AppContent: React.FC = () => {
   // 3. PROTECTED APPLICATION WORKSPACE (/app or /app/*)
   if (isAppRoute) {
     if (!isAuthenticated) {
-      const safeReturn = encodeURIComponent(path);
-      navigate(`/login?returnTo=${safeReturn}`, { replace: true });
       return <AuthScreen initialMode="signin" />;
     }
   } else {
@@ -242,7 +256,6 @@ const AppContent: React.FC = () => {
     if (!isAuthenticated) {
       return <MarketingLayout />;
     } else {
-      navigate('/app', { replace: true });
       return null;
     }
   }

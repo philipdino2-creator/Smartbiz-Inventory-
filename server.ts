@@ -1,3 +1,6 @@
+import { paystackClient, PaystackVerifyResponse } from './src/services/paystackClient.ts';
+import { createCheckoutSession, claimVerifiedPayment, cancelBusinessSubscription, processPaymentDisputeOrRefund } from './src/services/paymentService.ts';
+import { validateEncryptionConfig } from './src/utils/encryption.ts';
 import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import { createServer as createViteServer } from 'vite';
@@ -31,8 +34,45 @@ import type { PlanId, BillingInterval } from './src/types/subscription.ts';
 dotenv.config();
 
 const app = express();
-const PORT = Number(process.env.PORT) || 3000;
+/**
+ * Resolves the server listening port adhering to container proxy routing precedence:
+ * 1. APP_PORT (explicit application port override)
+ * 2. DEFAULT_APP_PORT (internal proxy forwarding port, e.g. 3000 behind Nginx on 8080)
+ * 3. PORT (standard container environment port, e.g. 8080 in direct Cloud Run deployments)
+ * 4. 3000 (standard local fallback)
+ */
+export function resolveServerPort(env: NodeJS.ProcessEnv = process.env): number {
+  const parsePort = (val: string | undefined): number | undefined => {
+    if (!val) return undefined;
+    const parsed = parseInt(val, 10);
+    return !isNaN(parsed) && parsed > 0 && parsed <= 65535 ? parsed : undefined;
+  };
+
+  return (
+    parsePort(env.APP_PORT) ??
+    parsePort(env.DEFAULT_APP_PORT) ??
+    parsePort(env.PORT) ??
+    3000
+  );
+}
+
+const PORT = resolveServerPort();
 const isProduction = process.env.NODE_ENV === 'production';
+
+// ==========================================
+// STARTUP SECURITY & ENCRYPTION CONFIGURATION
+// ==========================================
+// In production or staging, require a valid 32-byte PAYSTACK_TOKEN_ENCRYPTION_KEY.
+// In development, log a clean diagnostic warning without blocking local dev workflows.
+try {
+  const encConfig = validateEncryptionConfig(isProduction);
+  if (!encConfig.isValid && !isProduction) {
+    console.info('ℹ️ Development notice: PAYSTACK_TOKEN_ENCRYPTION_KEY is unconfigured or non-production. Local development mode active.');
+  }
+} catch (err: any) {
+  console.error('CRITICAL STARTUP ERROR:', err.message);
+  process.exit(1);
+}
 
 // ==========================================
 // RUNTIME STATE & GRACEFUL SHUTDOWN GUARDS
@@ -42,6 +82,8 @@ let activeRequestsCount = 0;
 let httpServer: Server | null = null;
 let shutdownPromise: Promise<void> | null = null;
 
+
+// ==========================================
 export function getShutdownStatus() {
   return { isShuttingDown, activeRequestsCount };
 }
@@ -60,7 +102,280 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-app.use(express.json({ limit: '10mb' }));
+app.use(
+  express.json({
+    limit: '10mb',
+    verify: (req: any, _res, buf) => {
+      // Capture the pristine raw buffer for HMAC-SHA512 webhook signature verification
+      req.rawBody = buf;
+    },
+  }));
+
+// PAYSTACK PAYMENT & WEBHOOK ROUTES (PHASE 3B)
+// ==========================================
+
+// 1. Initialize Subscription Checkout Session
+app.post('/api/subscription/checkout', requireAuth, requirePermission('manage_business'), async (req: AuthRequest, res: Response) => {
+  const { planId, interval, callbackUrl } = req.body;
+  if (!planId || (planId !== 'starter' && planId !== 'business')) {
+    res.status(400).json({ error: 'Valid plan identifier is required (starter or business)' });
+    return;
+  }
+  const billingInterval = interval === 'annual' ? 'annual' : 'monthly';
+
+  try {
+    const session = await createCheckoutSession({
+      businessId: req.businessId!,
+      userId: req.user!.id,
+      userEmail: req.user!.email,
+      planId,
+      interval: billingInterval,
+      callbackUrl,
+    });
+    res.json({ success: true, ...session });
+  } catch (err: any) {
+    console.error('Checkout creation failed:', err);
+    res.status(500).json({ error: err.message || 'Failed to create checkout session' });
+  }
+});
+
+// 2. Authoritative Verification Endpoint (Client return from Paystack redirect)
+app.get('/api/subscription/verify/:reference', requireAuth, requirePermission('manage_business'), async (req: AuthRequest, res: Response) => {
+  const { reference } = req.params;
+  if (!reference) {
+    res.status(400).json({ error: 'Payment reference is required' });
+    return;
+  }
+
+  try {
+    // Lookup pending checkout to verify tenant ownership
+    const pendingRows = await db
+      .select()
+      .from(schema.paymentTransactions)
+      .where(eq(schema.paymentTransactions.reference, reference))
+      .limit(1);
+
+    if (pendingRows.length === 0) {
+      res.status(404).json({ error: 'Checkout reference not found' });
+      return;
+    }
+
+    if (pendingRows[0].businessId !== req.businessId!) {
+      res.status(403).json({ error: 'Cross-tenant access forbidden' });
+      return;
+    }
+
+    // Call server-to-server Paystack verification
+    const verification = await paystackClient.verifyTransaction(reference);
+    if (!verification.verified || verification.status !== 'success') {
+      res.status(400).json({
+        success: false,
+        status: verification.status,
+        message: 'Payment has not been confirmed as successful by the provider.',
+      });
+      return;
+    }
+
+    const claimResult = await claimVerifiedPayment(verification);
+    res.status(claimResult.httpStatus).json(claimResult);
+  } catch (err: any) {
+    console.error('Verification error:', err);
+    res.status(500).json({ error: err.message || 'Payment verification failed' });
+  }
+});
+
+// 2b. Cancel Business Subscription Endpoint
+app.post('/api/subscription/cancel', requireAuth, requirePermission('manage_business'), async (req: AuthRequest, res: Response) => {
+  try {
+    const result = await cancelBusinessSubscription(req.businessId!);
+    res.json(result);
+  } catch (err: any) {
+    console.error('Subscription cancellation failed:', err);
+    res.status(500).json({ error: err.message || 'Failed to cancel subscription' });
+  }
+});
+
+
+// 3. Webhook Ingestion Route
+app.post('/api/webhooks/paystack', async (req: any, res: Response) => {
+  const signatureHeader = req.headers['x-paystack-signature'] as string;
+  const rawBody = req.rawBody as Buffer;
+
+  // Constant-time signature verification
+  if (!paystackClient.verifyWebhookSignature(rawBody, signatureHeader)) {
+    res.status(401).send('Invalid signature');
+    return;
+  }
+
+  const eventPayload = req.body;
+  const eventType = eventPayload?.event;
+  const data = eventPayload?.data;
+
+  // Validate required event structure
+  if (!eventType || typeof eventType !== 'string' || !data || typeof data !== 'object') {
+    res.status(400).send('Malformed payload rejected');
+    return;
+  }
+
+  // Derive stable and distinct identifiers to prevent collision across unrelated events
+  // For disputes, data.id is the dispute ID and transaction details are nested under data.transaction
+  // For refunds, reference is often under data.transaction_reference
+  const isDisputeEvent = typeof eventType === 'string' && eventType.startsWith('charge.dispute.');
+  const isRefundEvent = typeof eventType === 'string' && eventType.startsWith('refund.');
+
+  const nestedTx = data.transaction || null;
+  const disputeId = isDisputeEvent && data.id != null ? String(data.id) : null;
+  const refundId = isRefundEvent && data.id != null ? String(data.id) : null;
+
+  // Authoritative transaction ID
+  const providerTxId = isDisputeEvent
+    ? (nestedTx?.id != null ? String(nestedTx.id) : null)
+    : (data.id != null ? String(data.id) : null);
+
+  // Authoritative payment reference
+  const reference = isDisputeEvent
+    ? (nestedTx?.reference || null)
+    : isRefundEvent
+    ? (data.transaction_reference || data.reference || null)
+    : (data.reference || null);
+
+  const subCode = data.subscription?.subscription_code || data.subscription_code || null;
+
+  // If no reference, transaction ID, or subscription code exists, use body hash to prevent collapse
+  let identitySeed = '';
+  if (disputeId) {
+    identitySeed = `disp:${disputeId}`;
+  } else if (refundId) {
+    identitySeed = `refn:${refundId}`;
+  } else if (providerTxId) {
+    identitySeed = `tx:${providerTxId}`;
+  } else if (reference) {
+    identitySeed = `ref:${reference}`;
+  } else if (subCode) {
+    identitySeed = `sub:${subCode}`;
+  } else {
+    // Fallback for generic account-level events: use hash of raw event payload
+    identitySeed = `body:${crypto.createHash('sha256').update(rawBody || JSON.stringify(eventPayload)).digest('hex').substring(0, 32)}`;
+  }
+
+  const eventId = crypto
+    .createHash('sha256')
+    .update(`${eventType}:${identitySeed}`)
+    .digest('hex');
+
+  const nowIso = new Date().toISOString();
+
+  try {
+    // Deduplicate event entry in PostgreSQL
+    await db.execute(sql`
+      INSERT INTO webhook_events (id, event_type, reference, status, attempts, first_received_at)
+      VALUES (${eventId}, ${eventType}, ${reference || subCode || 'none'}, 'processing', 1, ${nowIso})
+      ON CONFLICT (id) DO UPDATE SET attempts = webhook_events.attempts + 1;
+    `);
+
+    // Lock event row for state evaluation
+    const eventRows = await db.execute(sql`SELECT status FROM webhook_events WHERE id = ${eventId} FOR UPDATE;`);
+    const currentStatus = (eventRows.rows[0] as any)?.status;
+
+    if (currentStatus === 'completed') {
+      res.status(200).send('Duplicate acknowledged');
+      return;
+    }
+
+    if (currentStatus === 'investigation_required') {
+      res.status(200).send('Permanent state acknowledged');
+      return;
+    }
+
+    // Branch 1: Charge Success (Subscription payment or renewal)
+    if (eventType === 'charge.success') {
+      if (!reference) {
+        await db.execute(sql`UPDATE webhook_events SET status = 'investigation_required', error_message = 'charge.success event missing reference' WHERE id = ${eventId};`);
+        res.status(200).send('Event missing reference');
+        return;
+      }
+
+      // Out-of-band authoritative server verification against Paystack
+      let verification: PaystackVerifyResponse;
+      try {
+        verification = await paystackClient.verifyTransaction(reference);
+      } catch (err: any) {
+        // Transient provider error (HTTP 429 / 5xx) -> return 500 so Paystack retries
+        res.status(500).send('Transient verification error');
+        return;
+      }
+
+      if (verification.status === 'pending') {
+        res.status(200).send('Transaction pending confirmation');
+        return;
+      }
+
+      if (!verification.verified || verification.status !== 'success') {
+        await db.execute(sql`UPDATE webhook_events SET status = 'investigation_required', error_message = 'Verification API not successful' WHERE id = ${eventId};`);
+        res.status(200).send('Verification failed permanently');
+        return;
+      }
+
+      const result = await claimVerifiedPayment(verification, eventId);
+      res.status(result.httpStatus).send(result.message);
+      return;
+    }
+
+    // Branch 2: Failed Subscription Invoice / Renewal
+    if (eventType === 'invoice.payment_failed') {
+      if (subCode) {
+        await db
+          .update(schema.subscriptions)
+          .set({ status: 'past_due', updatedAt: nowIso })
+          .where(eq(schema.subscriptions.providerSubscriptionId, subCode));
+      }
+      await db.execute(sql`UPDATE webhook_events SET status = 'completed', processed_at = ${nowIso} WHERE id = ${eventId};`);
+      res.status(200).send('Invoice failure processed');
+      return;
+    }
+
+    // Branch 3: Subscription Disabled or Cancelled at Provider
+    if (eventType === 'subscription.disable' || eventType === 'subscription.not_renew') {
+      if (subCode) {
+        await db
+          .update(schema.subscriptions)
+          .set({ cancelAtPeriodEnd: true, updatedAt: nowIso })
+          .where(eq(schema.subscriptions.providerSubscriptionId, subCode));
+      }
+      await db.execute(sql`UPDATE webhook_events SET status = 'completed', processed_at = ${nowIso} WHERE id = ${eventId};`);
+      res.status(200).send('Subscription cancellation scheduled');
+      return;
+    }
+
+    // Branch 4: Dispute, Chargeback, or Refund events
+    if (
+      eventType === 'charge.dispute.create' ||
+      eventType === 'charge.dispute.remind' ||
+      eventType === 'charge.dispute.resolve' ||
+      eventType === 'refund.processed' ||
+      eventType === 'refund.failed'
+    ) {
+      const result = await processPaymentDisputeOrRefund({
+        reference: reference || 'none',
+        providerTransactionId: providerTxId || undefined,
+        eventType,
+        resolution: data.resolution || undefined,
+        reason: data.reason || data.description || data.resolution || `Webhook ${eventType}`,
+        eventId,
+      });
+      res.status(result.httpStatus).send(result.message);
+      return;
+    }
+
+    // Default acknowledgement for informational / other provider events
+    await db.execute(sql`UPDATE webhook_events SET status = 'completed', processed_at = ${nowIso} WHERE id = ${eventId};`);
+    res.status(200).send('Event acknowledged');
+  } catch (err: any) {
+    console.error('Webhook processing error:', err);
+    res.status(500).send('Internal server error during webhook ingestion');
+  }
+});
+
 
 // ==========================================
 // OPERATIONAL HEALTH & READINESS PROBE

@@ -1,4 +1,5 @@
-import { pgTable, text, integer, numeric, boolean, timestamp, json, doublePrecision, index, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, text, integer, numeric, boolean, timestamp, json, doublePrecision, index, uniqueIndex, bigint } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import { relations } from 'drizzle-orm';
 
 // 1. BUSINESSES
@@ -290,12 +291,65 @@ export const subscriptions = pgTable('subscriptions', {
   paymentProvider: text('payment_provider').notNull().default('none'), // 'none' | 'paystack' | 'flutterwave'
   providerSubscriptionId: text('provider_subscription_id'),
   providerCustomerId: text('provider_customer_id'),
+  epoch: integer('epoch').notNull().default(1),
+  customerEmail: text('customer_email'),
+  emailTokenCiphertext: text('email_token_ciphertext'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 }, (table) => [
   index('subscriptions_business_id_idx').on(table.businessId),
   index('subscriptions_plan_id_idx').on(table.planId),
   index('subscriptions_status_idx').on(table.status),
+]);
+
+
+// 16. PAYMENT TRANSACTIONS
+export const paymentTransactions = pgTable('payment_transactions', {
+  id: text('id').primaryKey(),
+  businessId: text('business_id').references(() => businesses.id, { onDelete: 'restrict' }).notNull(),
+  subscriptionId: text('subscription_id').references(() => subscriptions.id, { onDelete: 'restrict' }),
+  reference: text('reference').notNull().unique(),
+  provider: text('provider').notNull().default('paystack'),
+  providerTransactionId: text('provider_transaction_id'),
+  planId: text('plan_id').notNull(),
+  billingInterval: text('billing_interval').notNull(),
+  amountKobo: bigint('amount_kobo', { mode: 'number' }).notNull(),
+  currency: text('currency').notNull().default('NGN'),
+  status: text('status').notNull().default('pending'), // 'pending' | 'success' | 'failed' | 'superseded_stale'
+  expectedEpoch: integer('expected_epoch').notNull().default(1),
+  channel: text('channel'),
+  customerEmail: text('customer_email').notNull(),
+  subscriptionCode: text('subscription_code'),
+  paidAt: text('paid_at'),
+  cardType: text('card_type'),
+  last4: text('last4'),
+  bank: text('bank'),
+  errorMessage: text('error_message'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => [
+  index('payment_transactions_business_idx').on(table.businessId),
+  index('payment_transactions_status_idx').on(table.status),
+  uniqueIndex('payment_transactions_provider_tx_idx')
+    .on(table.provider, table.providerTransactionId)
+    .where(sql`provider_transaction_id IS NOT NULL`),
+]);
+
+// 17. WEBHOOK EVENTS
+export const webhookEvents = pgTable('webhook_events', {
+  id: text('id').primaryKey(),
+  eventType: text('event_type').notNull(),
+  provider: text('provider').notNull().default('paystack'),
+  reference: text('reference'),
+  status: text('status').notNull().default('processing'), // 'processing' | 'completed' | 'failed' | 'investigation_required'
+  attempts: integer('attempts').notNull().default(1),
+  claimToken: text('claim_token'),
+  firstReceivedAt: text('first_received_at').notNull(),
+  processedAt: text('processed_at'),
+  errorMessage: text('error_message'),
+}, (table) => [
+  index('webhook_events_reference_idx').on(table.reference),
+  index('webhook_events_status_idx').on(table.status),
 ]);
 
 // RELATIONS

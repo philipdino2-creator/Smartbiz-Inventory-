@@ -10,6 +10,7 @@ import {
   SubscriptionStatusResponse,
   LimitType,
   PlanEntitlements,
+  PlanDefinition,
 } from '../types/subscription.ts';
 import { PLANS, resolvePlan } from '../config/plans.ts';
 
@@ -166,6 +167,40 @@ export const getBusinessUsage = async (
   };
 };
 
+
+/**
+ * Resolves the effective PlanDefinition for a business adhering strictly to subscription access policy:
+ * - 'active' AND within 'currentPeriodEnd' (including cancelAtPeriodEnd: true): Grants paid plan entitlements.
+ * - 'past_due', 'expired', 'cancelled', or currentPeriodEnd passed: Falls back strictly to 'free' tier entitlements.
+ * - 'free' plan: Grants 'free' tier entitlements.
+ */
+export const getEffectivePlan = (subscription: BusinessSubscription): PlanDefinition => {
+  // If base plan is free, resolve free
+  if (subscription.planId === 'free') {
+    return PLANS.free;
+  }
+
+  // Check subscription status
+  if (subscription.status !== 'active') {
+    return PLANS.free;
+  }
+
+  // Check period expiration against Africa/Lagos today
+  const lagosToday = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Lagos',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+
+  if (subscription.currentPeriodEnd < lagosToday) {
+    return PLANS.free;
+  }
+
+  // Subscription is active and within currentPeriodEnd (even if scheduled to cancel at period end)
+  return resolvePlan(subscription.planId);
+};
+
 export interface PlanLimitCheckResult {
   allowed: boolean;
   limitType: LimitType;
@@ -186,7 +221,7 @@ export const checkPlanLimit = async (
   executor: any = db
 ): Promise<PlanLimitCheckResult> => {
   const subscription = await getBusinessSubscription(businessId, executor);
-  const plan = resolvePlan(subscription.planId);
+  const plan = getEffectivePlan(subscription);
   const usage = await getBusinessUsage(businessId, executor);
 
   let currentUsage = 0;
@@ -252,7 +287,7 @@ export const checkFeatureEntitlement = async (
   feature: keyof PlanEntitlements
 ): Promise<{ allowed: boolean; planName: string; feature: string }> => {
   const subscription = await getBusinessSubscription(businessId);
-  const plan = resolvePlan(subscription.planId);
+  const plan = getEffectivePlan(subscription);
   const allowed = Boolean(plan.entitlements[feature]);
 
   return {
@@ -269,7 +304,7 @@ export const getFullSubscriptionStatus = async (
   businessId: string
 ): Promise<SubscriptionStatusResponse> => {
   const subscription = await getBusinessSubscription(businessId);
-  const plan = resolvePlan(subscription.planId);
+  const plan = getEffectivePlan(subscription);
   const usage = await getBusinessUsage(businessId);
 
   return {
@@ -320,7 +355,7 @@ export const assertPlanLimitInTransaction = async (
   await tx.select().from(schema.businesses).where(eq(schema.businesses.id, businessId)).for('update');
 
   const subscription = await getBusinessSubscription(businessId);
-  const plan = resolvePlan(subscription.planId);
+  const plan = getEffectivePlan(subscription);
   const { firstDay, lastDay } = getCurrentMonthDateRange();
 
   let count = 0;

@@ -4,14 +4,160 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
-// server.ts
-import express from "express";
-import { createServer as createViteServer } from "vite";
-import path2 from "path";
-import fs2 from "fs";
-import dotenv from "dotenv";
-import crypto2 from "crypto";
-import bcrypt2 from "bcryptjs";
+// src/services/paystackClient.ts
+import crypto from "crypto";
+var PaystackClient = class {
+  constructor(secretKey) {
+    this.explicitSecretKey = secretKey;
+  }
+  getSecretKey() {
+    return this.explicitSecretKey || process.env.PAYSTACK_SECRET_KEY || "";
+  }
+  isConfigured() {
+    const key = this.getSecretKey();
+    return Boolean(key && key.startsWith("sk_"));
+  }
+  /**
+   * Constant-time HMAC-SHA512 webhook signature verification.
+   */
+  verifyWebhookSignature(rawBody, signatureHeader) {
+    const key = this.getSecretKey();
+    if (!key || !signatureHeader) return false;
+    try {
+      if (signatureHeader.length !== 128 || !/^[0-9a-fA-F]+$/.test(signatureHeader)) {
+        return false;
+      }
+      const hash = crypto.createHmac("sha512", key).update(rawBody).digest("hex");
+      const expectedBuf = Buffer.from(hash, "utf8");
+      const signatureBuf = Buffer.from(signatureHeader, "utf8");
+      if (expectedBuf.length !== signatureBuf.length) return false;
+      return crypto.timingSafeEqual(expectedBuf, signatureBuf);
+    } catch {
+      return false;
+    }
+  }
+  /**
+   * Initializes a transaction with Paystack.
+   */
+  async initializeTransaction(request) {
+    if (!this.isConfigured()) {
+      throw new Error("PAYSTACK_NOT_CONFIGURED: Paystack secret key is missing or unconfigured.");
+    }
+    const payload = {
+      email: request.email,
+      amount: request.amountKobo,
+      currency: "NGN",
+      reference: request.reference,
+      callback_url: request.callbackUrl,
+      metadata: request.metadata
+    };
+    if (request.planCode) {
+      payload.plan = request.planCode;
+    }
+    const res = await fetch("https://api.paystack.co/transaction/initialize", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.getSecretKey()}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const errorBody = await res.text();
+      throw new Error(`PAYSTACK_INITIALIZE_FAILED: HTTP ${res.status} - ${errorBody}`);
+    }
+    return await res.json();
+  }
+  /**
+   * Verifies a transaction authoritatively with Paystack server.
+   */
+  async verifyTransaction(reference) {
+    if (!this.isConfigured()) {
+      throw new Error("PAYSTACK_NOT_CONFIGURED: Paystack secret key is missing or unconfigured.");
+    }
+    const res = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${this.getSecretKey()}`,
+        "Content-Type": "application/json"
+      }
+    });
+    if (!res.ok) {
+      if (res.status >= 500 || res.status === 429) {
+        throw new Error(`PAYSTACK_VERIFY_TRANSIENT_ERROR: HTTP ${res.status}`);
+      }
+      return {
+        verified: false,
+        status: "failed",
+        reference,
+        providerTransactionId: "",
+        amountKobo: 0,
+        currency: "NGN",
+        customerEmail: ""
+      };
+    }
+    const body = await res.json();
+    const data = body.data;
+    return {
+      verified: body.status === true && data.status === "success",
+      status: data.status,
+      reference: data.reference,
+      providerTransactionId: String(data.id),
+      amountKobo: Number(data.amount) || 0,
+      currency: data.currency || "NGN",
+      customerEmail: data.customer?.email || "",
+      customerCode: data.customer?.customer_code,
+      subscriptionCode: data.subscription?.subscription_code || data.plan_object?.plan_code,
+      emailToken: data.subscription?.email_token,
+      channel: data.channel,
+      cardType: data.authorization?.card_type,
+      last4: data.authorization?.last4,
+      bank: data.authorization?.bank,
+      paidAt: data.paid_at,
+      metadata: data.metadata
+    };
+  }
+  /**
+   * Disables/cancels a subscription on Paystack.
+   * Paystack endpoint: POST https://api.paystack.co/subscription/disable
+   * Body: { code: subscription_code, token: email_token }
+   */
+  async disableSubscription(params) {
+    if (!this.isConfigured()) {
+      throw new Error("PAYSTACK_NOT_CONFIGURED: Paystack secret key is missing or unconfigured.");
+    }
+    const payload = {
+      code: params.code
+    };
+    if (params.token) {
+      payload.token = params.token;
+    }
+    const res = await fetch("https://api.paystack.co/subscription/disable", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.getSecretKey()}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      if (res.status >= 500 || res.status === 429) {
+        throw new Error(`PAYSTACK_DISABLE_TRANSIENT_ERROR: HTTP ${res.status}`);
+      }
+      const errText = await res.text();
+      throw new Error(`PAYSTACK_DISABLE_FAILED: HTTP ${res.status} - ${errText}`);
+    }
+    const body = await res.json();
+    return {
+      status: body.status === true,
+      message: body.message || "Subscription disabled successfully"
+    };
+  }
+};
+var paystackClient = new PaystackClient();
+
+// src/services/paymentService.ts
+import crypto3 from "crypto";
 
 // src/db/index.ts
 import { drizzle } from "drizzle-orm/node-postgres";
@@ -29,6 +175,7 @@ __export(schema_exports, {
   expenseCategories: () => expenseCategories,
   expenses: () => expenses,
   payables: () => payables,
+  paymentTransactions: () => paymentTransactions,
   products: () => products,
   recurringExpenses: () => recurringExpenses,
   saleItems: () => saleItems,
@@ -39,9 +186,11 @@ __export(schema_exports, {
   sessionsRelations: () => sessionsRelations,
   subscriptions: () => subscriptions,
   subscriptionsRelations: () => subscriptionsRelations,
-  users: () => users
+  users: () => users,
+  webhookEvents: () => webhookEvents
 });
-import { pgTable, text, integer, numeric, boolean, timestamp, json, doublePrecision, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, integer, numeric, boolean, timestamp, json, doublePrecision, index, uniqueIndex, bigint } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { relations } from "drizzle-orm";
 var businesses = pgTable("businesses", {
   id: text("id").primaryKey(),
@@ -319,12 +468,60 @@ var subscriptions = pgTable("subscriptions", {
   // 'none' | 'paystack' | 'flutterwave'
   providerSubscriptionId: text("provider_subscription_id"),
   providerCustomerId: text("provider_customer_id"),
+  epoch: integer("epoch").notNull().default(1),
+  customerEmail: text("customer_email"),
+  emailTokenCiphertext: text("email_token_ciphertext"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull()
 }, (table) => [
   index("subscriptions_business_id_idx").on(table.businessId),
   index("subscriptions_plan_id_idx").on(table.planId),
   index("subscriptions_status_idx").on(table.status)
+]);
+var paymentTransactions = pgTable("payment_transactions", {
+  id: text("id").primaryKey(),
+  businessId: text("business_id").references(() => businesses.id, { onDelete: "restrict" }).notNull(),
+  subscriptionId: text("subscription_id").references(() => subscriptions.id, { onDelete: "restrict" }),
+  reference: text("reference").notNull().unique(),
+  provider: text("provider").notNull().default("paystack"),
+  providerTransactionId: text("provider_transaction_id"),
+  planId: text("plan_id").notNull(),
+  billingInterval: text("billing_interval").notNull(),
+  amountKobo: bigint("amount_kobo", { mode: "number" }).notNull(),
+  currency: text("currency").notNull().default("NGN"),
+  status: text("status").notNull().default("pending"),
+  // 'pending' | 'success' | 'failed' | 'superseded_stale'
+  expectedEpoch: integer("expected_epoch").notNull().default(1),
+  channel: text("channel"),
+  customerEmail: text("customer_email").notNull(),
+  subscriptionCode: text("subscription_code"),
+  paidAt: text("paid_at"),
+  cardType: text("card_type"),
+  last4: text("last4"),
+  bank: text("bank"),
+  errorMessage: text("error_message"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull()
+}, (table) => [
+  index("payment_transactions_business_idx").on(table.businessId),
+  index("payment_transactions_status_idx").on(table.status),
+  uniqueIndex("payment_transactions_provider_tx_idx").on(table.provider, table.providerTransactionId).where(sql`provider_transaction_id IS NOT NULL`)
+]);
+var webhookEvents = pgTable("webhook_events", {
+  id: text("id").primaryKey(),
+  eventType: text("event_type").notNull(),
+  provider: text("provider").notNull().default("paystack"),
+  reference: text("reference"),
+  status: text("status").notNull().default("processing"),
+  // 'processing' | 'completed' | 'failed' | 'investigation_required'
+  attempts: integer("attempts").notNull().default(1),
+  claimToken: text("claim_token"),
+  firstReceivedAt: text("first_received_at").notNull(),
+  processedAt: text("processed_at"),
+  errorMessage: text("error_message")
+}, (table) => [
+  index("webhook_events_reference_idx").on(table.reference),
+  index("webhook_events_status_idx").on(table.status)
 ]);
 var businessesRelations = relations(businesses, ({ one, many }) => ({
   users: many(users),
@@ -411,8 +608,666 @@ var closePool = async (customPool) => {
   }
 };
 
+// src/services/paymentService.ts
+import { eq, sql as sql2 } from "drizzle-orm";
+
+// src/config/plans.ts
+var KOBO_PER_NAIRA = 100;
+var PLANS = {
+  free: {
+    id: "free",
+    name: "Free",
+    tagline: "Essential bookkeeping for single-operator kiosks and startups",
+    monthlyPriceKobo: 0,
+    annualPriceKobo: 0,
+    monthlyPriceNgn: 0,
+    annualPriceNgn: 0,
+    entitlements: {
+      maxUsers: 1,
+      maxSalesPerMonth: 50,
+      maxExpensesPerMonth: 50,
+      maxCustomers: 30,
+      maxProducts: 25,
+      multiUserRbac: false,
+      debtTracking: true,
+      thermalReceipts: true,
+      recurringExpenses: false,
+      dailyReconciliation: false,
+      auditTrail: false,
+      dataExport: false,
+      whatsappReminders: false
+    },
+    isAvailable: true,
+    isFuture: false,
+    highlight: false,
+    recommendedFor: "Solo entrepreneurs, micro-retailers, and new trade kiosks starting their digital records."
+  },
+  starter: {
+    id: "starter",
+    name: "Starter",
+    tagline: "Empowering busy solo shops with higher limits and recurring bills",
+    monthlyPriceKobo: 2500 * KOBO_PER_NAIRA,
+    // 250,000 kobo (₦2,500)
+    annualPriceKobo: 25e3 * KOBO_PER_NAIRA,
+    // 2,500,000 kobo (₦25,000 - equivalent to 10 months / 2 months free)
+    monthlyPriceNgn: 2500,
+    annualPriceNgn: 25e3,
+    entitlements: {
+      maxUsers: 1,
+      maxSalesPerMonth: 500,
+      maxExpensesPerMonth: 500,
+      maxCustomers: 500,
+      maxProducts: 500,
+      multiUserRbac: false,
+      debtTracking: true,
+      thermalReceipts: true,
+      recurringExpenses: true,
+      dailyReconciliation: true,
+      auditTrail: false,
+      dataExport: true,
+      whatsappReminders: false
+    },
+    isAvailable: true,
+    isFuture: false,
+    highlight: true,
+    recommendedFor: "Active solo operators needing higher volume, scheduled subscriptions, and CSV exports."
+  },
+  business: {
+    id: "business",
+    name: "Business",
+    tagline: "Full multi-user team collaboration, cash drawer auditing & WhatsApp reminders",
+    monthlyPriceKobo: 5e3 * KOBO_PER_NAIRA,
+    // 500,000 kobo (₦5,000)
+    annualPriceKobo: 5e4 * KOBO_PER_NAIRA,
+    // 5,000,000 kobo (₦50,000 - equivalent to 10 months / 2 months free)
+    monthlyPriceNgn: 5e3,
+    annualPriceNgn: 5e4,
+    entitlements: {
+      maxUsers: 5,
+      maxSalesPerMonth: 5e3,
+      // Fair-use volume for growing SMEs
+      maxExpensesPerMonth: 5e3,
+      maxCustomers: 5e3,
+      maxProducts: 5e3,
+      multiUserRbac: true,
+      debtTracking: true,
+      thermalReceipts: true,
+      recurringExpenses: true,
+      dailyReconciliation: true,
+      auditTrail: true,
+      dataExport: true,
+      whatsappReminders: true
+    },
+    isAvailable: true,
+    isFuture: false,
+    highlight: false,
+    recommendedFor: "Growing SMEs, ICT centres, supermarkets, and stores with cashiers and managers."
+  },
+  business_plus: {
+    id: "business_plus",
+    name: "Business Plus",
+    tagline: "Multi-branch operations, automated integrations, and priority SLA",
+    monthlyPriceKobo: 1e4 * KOBO_PER_NAIRA,
+    // 1,000,000 kobo (₦10,000)
+    annualPriceKobo: 1e5 * KOBO_PER_NAIRA,
+    // 10,000,000 kobo (₦100,000)
+    monthlyPriceNgn: 1e4,
+    annualPriceNgn: 1e5,
+    entitlements: {
+      maxUsers: 25,
+      maxSalesPerMonth: 5e4,
+      maxExpensesPerMonth: 5e4,
+      maxCustomers: 5e4,
+      maxProducts: 5e4,
+      multiUserRbac: true,
+      debtTracking: true,
+      thermalReceipts: true,
+      recurringExpenses: true,
+      dailyReconciliation: true,
+      auditTrail: true,
+      dataExport: true,
+      whatsappReminders: true
+    },
+    isAvailable: false,
+    // NOT available for purchase at launch
+    isFuture: true,
+    highlight: false,
+    recommendedFor: "Multi-location businesses and large vocational academies (Future Offering)."
+  }
+};
+var calculateAnnualSavingsNgn = (planId) => {
+  const plan = PLANS[planId];
+  if (!plan || plan.monthlyPriceNgn === 0) return 0;
+  const twelveMonthsMonthly = plan.monthlyPriceNgn * 12;
+  return twelveMonthsMonthly - plan.annualPriceNgn;
+};
+var resolvePlan = (planId) => {
+  if (planId && planId in PLANS) {
+    return PLANS[planId];
+  }
+  return PLANS.free;
+};
+
+// src/utils/encryption.ts
+import crypto2 from "crypto";
+function getEncryptionKey() {
+  const hexOrBase64 = process.env.PAYSTACK_TOKEN_ENCRYPTION_KEY;
+  if (!hexOrBase64) return null;
+  if (hexOrBase64.length === 64 && /^[0-9a-fA-F]+$/.test(hexOrBase64)) {
+    return Buffer.from(hexOrBase64, "hex");
+  }
+  if (Buffer.byteLength(hexOrBase64, "utf8") === 32) {
+    return Buffer.from(hexOrBase64, "utf8");
+  }
+  return null;
+}
+function encryptAes256Gcm(plaintext) {
+  const key = getEncryptionKey();
+  if (!key) {
+    throw new Error("ENCRYPTION_KEY_NOT_CONFIGURED: Valid 32-byte PAYSTACK_TOKEN_ENCRYPTION_KEY is required.");
+  }
+  const iv = crypto2.randomBytes(12);
+  const cipher = crypto2.createCipheriv("aes-256-gcm", key, iv);
+  let encrypted = cipher.update(plaintext, "utf8", "hex");
+  encrypted += cipher.final("hex");
+  const authTag = cipher.getAuthTag();
+  return `v1:${iv.toString("hex")}:${authTag.toString("hex")}:${encrypted}`;
+}
+function decryptAes256Gcm(versionedCiphertext) {
+  const key = getEncryptionKey();
+  if (!key) {
+    throw new Error("ENCRYPTION_KEY_NOT_CONFIGURED: Valid 32-byte PAYSTACK_TOKEN_ENCRYPTION_KEY is required.");
+  }
+  const parts = versionedCiphertext.split(":");
+  if (parts.length !== 4 || parts[0] !== "v1") {
+    throw new Error("INVALID_CIPHERTEXT_FORMAT: Expected v1:<iv>:<tag>:<ciphertext>");
+  }
+  const [, ivHex, tagHex, encryptedHex] = parts;
+  const iv = Buffer.from(ivHex, "hex");
+  const tag = Buffer.from(tagHex, "hex");
+  if (iv.length !== 12 || tag.length !== 16) {
+    throw new Error("INVALID_CIPHERTEXT_PARAMETERS: IV must be 12 bytes and AuthTag must be 16 bytes.");
+  }
+  const decipher = crypto2.createDecipheriv("aes-256-gcm", key, iv);
+  decipher.setAuthTag(tag);
+  let decrypted = decipher.update(encryptedHex, "hex", "utf8");
+  decrypted += decipher.final("utf8");
+  return decrypted;
+}
+function validateEncryptionConfig(requireKey = false) {
+  const envVal = process.env.PAYSTACK_TOKEN_ENCRYPTION_KEY;
+  if (!envVal) {
+    if (requireKey) {
+      throw new Error("PAYSTACK_TOKEN_ENCRYPTION_KEY is required but not set.");
+    }
+    return { isConfigured: false, isValid: false, errorMessage: "Key not set" };
+  }
+  const keyBuf = getEncryptionKey();
+  if (!keyBuf || keyBuf.length !== 32) {
+    const msg = "PAYSTACK_TOKEN_ENCRYPTION_KEY must be a 64-character hex string or 32-character UTF-8 string (32 bytes).";
+    if (requireKey) {
+      throw new Error(msg);
+    }
+    return { isConfigured: true, isValid: false, errorMessage: msg };
+  }
+  return { isConfigured: true, isValid: true };
+}
+
+// src/services/paymentService.ts
+function areAmountsEqual(a, b) {
+  try {
+    return BigInt(a) === BigInt(b);
+  } catch {
+    return false;
+  }
+}
+function getLagosTodayYmd() {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Lagos",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+  return formatter.format(/* @__PURE__ */ new Date());
+}
+function calculateAuthoritativePeriodEnd(anchorYmd, interval) {
+  const [yearStr, monthStr, dayStr] = anchorYmd.split("-");
+  let year = parseInt(yearStr, 10);
+  let month = parseInt(monthStr, 10);
+  const day = parseInt(dayStr, 10);
+  if (interval === "annual") {
+    year += 1;
+    if (month === 2 && day === 29) {
+      const isLeap = year % 4 === 0 && year % 100 !== 0 || year % 400 === 0;
+      return `${year}-02-${isLeap ? "29" : "28"}`;
+    }
+    return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  }
+  month += 1;
+  if (month > 12) {
+    month = 1;
+    year += 1;
+  }
+  const maxDaysInTargetMonth = new Date(year, month, 0).getDate();
+  const clampedDay = Math.min(day, maxDaysInTargetMonth);
+  return `${year}-${String(month).padStart(2, "0")}-${String(clampedDay).padStart(2, "0")}`;
+}
+async function createCheckoutSession(params) {
+  const { businessId, userId, userEmail, planId, interval, callbackUrl } = params;
+  if (planId === "free" || planId === "business_plus") {
+    throw new Error("INVALID_PLAN: Free plan does not require checkout, and Business Plus is not yet available.");
+  }
+  const planDef = PLANS[planId];
+  if (!planDef) {
+    throw new Error(`UNKNOWN_PLAN: Plan ${planId} is not recognized.`);
+  }
+  const expectedAmountKobo = interval === "annual" ? planDef.annualPriceKobo : planDef.monthlyPriceKobo;
+  const reference = `pst_${businessId}_${Date.now()}_${crypto3.randomBytes(4).toString("hex")}`;
+  const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+  const subRows = await db.select().from(subscriptions).where(eq(subscriptions.businessId, businessId)).limit(1);
+  const currentEpoch = subRows[0]?.epoch ?? 1;
+  await db.insert(paymentTransactions).values({
+    id: `ptx_${Date.now()}_${crypto3.randomBytes(4).toString("hex")}`,
+    businessId,
+    subscriptionId: subRows[0]?.id || null,
+    reference,
+    provider: "paystack",
+    providerTransactionId: null,
+    planId,
+    billingInterval: interval,
+    amountKobo: expectedAmountKobo,
+    currency: "NGN",
+    status: "pending",
+    expectedEpoch: currentEpoch,
+    customerEmail: userEmail,
+    createdAt: nowIso,
+    updatedAt: nowIso
+  });
+  if (paystackClient.isConfigured()) {
+    const initRes = await paystackClient.initializeTransaction({
+      email: userEmail,
+      amountKobo: expectedAmountKobo,
+      reference,
+      callbackUrl,
+      metadata: {
+        businessId,
+        planId,
+        billingInterval: interval,
+        userId,
+        expectedEpoch: currentEpoch
+      }
+    });
+    return {
+      checkoutUrl: initRes.data.authorization_url,
+      reference,
+      amountKobo: expectedAmountKobo
+    };
+  }
+  const isProduction2 = process.env.NODE_ENV === "production";
+  if (isProduction2) {
+    throw new Error(
+      "PAYMENT_PROVIDER_UNCONFIGURED: Real-time payment processing is unavailable in production because Paystack credentials are not configured."
+    );
+  }
+  const devCallback = callbackUrl || `/app/plan?payment_ref=${reference}`;
+  return {
+    checkoutUrl: devCallback,
+    reference,
+    amountKobo: expectedAmountKobo
+  };
+}
+async function claimVerifiedPayment(verification, eventId) {
+  const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+  const todayLagos = getLagosTodayYmd();
+  const reference = verification.reference;
+  const providerTxId = verification.providerTransactionId;
+  return await db.transaction(async (tx) => {
+    const pendingRows = await tx.select().from(paymentTransactions).where(eq(paymentTransactions.reference, reference)).for("update");
+    if (pendingRows.length === 0) {
+      if (eventId) {
+        await tx.execute(sql2`
+          UPDATE webhook_events SET status = 'investigation_required', error_message = 'Unknown reference' WHERE id = ${eventId}
+        `);
+      }
+      return { success: false, status: "unknown_reference", httpStatus: 200, message: "Unknown reference recorded" };
+    }
+    const pending = pendingRows[0];
+    if (pending.status === "success") {
+      if (eventId) {
+        await tx.execute(sql2`
+          UPDATE webhook_events SET status = 'completed', processed_at = ${nowIso} WHERE id = ${eventId}
+        `);
+      }
+      return { success: true, status: "already_credited", httpStatus: 200, message: "Payment already credited" };
+    }
+    if (pending.status !== "pending") {
+      if (eventId) {
+        await tx.execute(sql2`
+          UPDATE webhook_events SET status = 'investigation_required', error_message = ${`Payment is ineligible for activation in status: ${pending.status}`} WHERE id = ${eventId}
+        `);
+      }
+      return {
+        success: false,
+        status: `ineligible_state_${pending.status}`,
+        httpStatus: 200,
+        message: `Payment cannot transition to success from ineligible state: ${pending.status}`
+      };
+    }
+    if (!areAmountsEqual(pending.amountKobo, verification.amountKobo) || verification.currency !== "NGN") {
+      await tx.update(paymentTransactions).set({ status: "failed", errorMessage: "Amount or currency mismatch", updatedAt: nowIso }).where(eq(paymentTransactions.id, pending.id));
+      if (eventId) {
+        await tx.execute(sql2`
+          UPDATE webhook_events SET status = 'investigation_required', error_message = 'Amount or currency mismatch' WHERE id = ${eventId}
+        `);
+      }
+      return { success: false, status: "mismatch", httpStatus: 200, message: "Amount or currency mismatch" };
+    }
+    await tx.select().from(businesses).where(eq(businesses.id, pending.businessId)).for("update");
+    const subRows = await tx.select().from(subscriptions).where(eq(subscriptions.businessId, pending.businessId)).for("update");
+    const currentSub = subRows[0];
+    if (currentSub && pending.expectedEpoch < currentSub.epoch) {
+      await tx.update(paymentTransactions).set({
+        status: "superseded_stale",
+        errorMessage: `Checkout belongs to stale epoch ${pending.expectedEpoch} (current: ${currentSub.epoch})`,
+        updatedAt: nowIso
+      }).where(eq(paymentTransactions.id, pending.id));
+      if (eventId) {
+        await tx.execute(sql2`
+          UPDATE webhook_events SET status = 'investigation_required', error_message = 'Superseded epoch' WHERE id = ${eventId}
+        `);
+      }
+      return { success: false, status: "superseded_stale", httpStatus: 200, message: "Payment superseded by newer epoch" };
+    }
+    let newPeriodStart = todayLagos;
+    let newPeriodEnd;
+    const isCurrentPlanActive = currentSub && currentSub.currentPeriodEnd > todayLagos && currentSub.planId === pending.planId;
+    if (isCurrentPlanActive) {
+      newPeriodStart = currentSub.currentPeriodStart;
+      newPeriodEnd = calculateAuthoritativePeriodEnd(currentSub.currentPeriodEnd, pending.billingInterval);
+    } else {
+      newPeriodStart = todayLagos;
+      newPeriodEnd = calculateAuthoritativePeriodEnd(todayLagos, pending.billingInterval);
+    }
+    let encryptedToken = currentSub?.emailTokenCiphertext || null;
+    if (verification.emailToken) {
+      try {
+        encryptedToken = encryptAes256Gcm(verification.emailToken);
+      } catch (err) {
+        console.warn("Could not encrypt email token (encryption key not configured). Token not persisted.");
+      }
+    }
+    const nextEpoch = (currentSub?.epoch || 1) + 1;
+    await tx.insert(subscriptions).values({
+      id: `sub_${Date.now()}_${crypto3.randomBytes(4).toString("hex")}`,
+      businessId: pending.businessId,
+      planId: pending.planId,
+      billingInterval: pending.billingInterval,
+      status: "active",
+      startDate: todayLagos,
+      currentPeriodStart: newPeriodStart,
+      currentPeriodEnd: newPeriodEnd,
+      cancelAtPeriodEnd: false,
+      paymentProvider: "paystack",
+      providerSubscriptionId: verification.subscriptionCode || null,
+      providerCustomerId: verification.customerCode || null,
+      customerEmail: pending.customerEmail,
+      emailTokenCiphertext: encryptedToken,
+      epoch: nextEpoch,
+      createdAt: nowIso,
+      updatedAt: nowIso
+    }).onConflictDoUpdate({
+      target: subscriptions.businessId,
+      set: {
+        planId: pending.planId,
+        billingInterval: pending.billingInterval,
+        status: "active",
+        currentPeriodStart: newPeriodStart,
+        currentPeriodEnd: newPeriodEnd,
+        cancelAtPeriodEnd: false,
+        paymentProvider: "paystack",
+        providerSubscriptionId: sql2`COALESCE(${verification.subscriptionCode || null}, subscriptions.provider_subscription_id)`,
+        providerCustomerId: sql2`COALESCE(${verification.customerCode || null}, subscriptions.provider_customer_id)`,
+        customerEmail: pending.customerEmail,
+        emailTokenCiphertext: sql2`COALESCE(${encryptedToken}, subscriptions.email_token_ciphertext)`,
+        epoch: nextEpoch,
+        updatedAt: nowIso
+      }
+    });
+    await tx.update(paymentTransactions).set({
+      status: "success",
+      providerTransactionId: providerTxId || null,
+      paidAt: verification.paidAt || nowIso,
+      channel: verification.channel || "card",
+      cardType: verification.cardType || null,
+      last4: verification.last4 || null,
+      bank: verification.bank || null,
+      updatedAt: nowIso
+    }).where(eq(paymentTransactions.id, pending.id));
+    if (eventId) {
+      await tx.execute(sql2`
+        UPDATE webhook_events SET status = 'completed', processed_at = ${nowIso} WHERE id = ${eventId}
+      `);
+    }
+    return {
+      success: true,
+      status: "credited",
+      httpStatus: 200,
+      message: `Successfully activated ${pending.planId} plan until ${newPeriodEnd}`
+    };
+  });
+}
+async function cancelBusinessSubscription(businessId) {
+  const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+  const subRows = await db.select().from(subscriptions).where(eq(subscriptions.businessId, businessId)).limit(1);
+  if (subRows.length === 0) {
+    throw new Error("SUBSCRIPTION_NOT_FOUND: Business does not have an active subscription record.");
+  }
+  const sub = subRows[0];
+  if (sub.planId === "free") {
+    return {
+      success: true,
+      cancelAtPeriodEnd: false,
+      currentPeriodEnd: sub.currentPeriodEnd,
+      providerDisabled: false,
+      message: "Subscription is already on the Free tier."
+    };
+  }
+  const hasPendingProviderDisable = sub.cancelAtPeriodEnd && sub.paymentProvider === "paystack" && Boolean(sub.providerSubscriptionId);
+  if (sub.cancelAtPeriodEnd && !hasPendingProviderDisable) {
+    return {
+      success: true,
+      cancelAtPeriodEnd: true,
+      currentPeriodEnd: sub.currentPeriodEnd,
+      providerDisabled: true,
+      providerStatus: "confirmed",
+      message: `Subscription is already scheduled for cancellation on on ${sub.currentPeriodEnd}.`
+    };
+  }
+  let providerDisabled = false;
+  let providerStatus = "not_applicable";
+  if (sub.paymentProvider === "paystack" && sub.providerSubscriptionId) {
+    if (paystackClient.isConfigured()) {
+      let emailToken;
+      if (sub.emailTokenCiphertext) {
+        try {
+          emailToken = decryptAes256Gcm(sub.emailTokenCiphertext);
+        } catch (err) {
+          console.warn("Could not decrypt email token for provider subscription disable.");
+        }
+      }
+      try {
+        const disableRes = await paystackClient.disableSubscription({
+          code: sub.providerSubscriptionId,
+          token: emailToken
+        });
+        providerDisabled = disableRes.status;
+        providerStatus = providerDisabled ? "confirmed" : "pending_retry";
+      } catch (err) {
+        console.error("Paystack subscription disable failed or warning:", err.message);
+        providerDisabled = false;
+        providerStatus = "pending_retry";
+      }
+    } else {
+      providerDisabled = true;
+      providerStatus = "confirmed";
+    }
+  }
+  return await db.transaction(async (tx) => {
+    const lockedSubRows = await tx.select().from(subscriptions).where(eq(subscriptions.businessId, businessId)).for("update");
+    const currentSub = lockedSubRows[0];
+    if (!currentSub) {
+      throw new Error("SUBSCRIPTION_NOT_FOUND: Record missing during lock.");
+    }
+    const nextEpoch = currentSub.epoch + 1;
+    const updatedProviderSubId = providerStatus === "confirmed" ? null : currentSub.providerSubscriptionId;
+    await tx.update(subscriptions).set({
+      cancelAtPeriodEnd: true,
+      providerSubscriptionId: updatedProviderSubId,
+      epoch: nextEpoch,
+      updatedAt: nowIso
+    }).where(eq(subscriptions.businessId, businessId));
+    const statusMsg = providerStatus === "confirmed" ? `Subscription will be cancelled at period end on ${currentSub.currentPeriodEnd}. Paid entitlements remain active until this date.` : providerStatus === "pending_retry" ? `Subscription scheduled for cancellation on ${currentSub.currentPeriodEnd}, but provider recurring disable is pending retry.` : `Subscription will be cancelled at period end on ${currentSub.currentPeriodEnd}.`;
+    return {
+      success: true,
+      cancelAtPeriodEnd: true,
+      currentPeriodEnd: currentSub.currentPeriodEnd,
+      providerDisabled,
+      providerStatus,
+      message: statusMsg
+    };
+  });
+}
+async function processPaymentDisputeOrRefund(params) {
+  const { reference, providerTransactionId, eventType, reason, eventId } = params;
+  const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+  return await db.transaction(async (tx) => {
+    let query = tx.select().from(paymentTransactions);
+    if (reference && reference !== "no_ref" && reference !== "none") {
+      query = query.where(eq(paymentTransactions.reference, reference));
+    } else if (providerTransactionId) {
+      query = query.where(eq(paymentTransactions.providerTransactionId, providerTransactionId));
+    } else {
+      if (eventId) {
+        await tx.execute(sql2`UPDATE webhook_events SET status = 'investigation_required', error_message = 'Missing identifier for dispute/refund' WHERE id = ${eventId};`);
+      }
+      return { success: false, status: "missing_identifier", httpStatus: 200, message: "Missing payment identifier" };
+    }
+    const lockedRows = await query.for("update");
+    if (lockedRows.length === 0) {
+      if (eventId) {
+        await tx.execute(sql2`UPDATE webhook_events SET status = 'investigation_required', error_message = 'Payment not found for dispute/refund' WHERE id = ${eventId};`);
+      }
+      return { success: false, status: "payment_not_found", httpStatus: 200, message: "Payment record not found" };
+    }
+    const payment = lockedRows[0];
+    const { resolution } = params;
+    if (payment.status === "refunded" && eventType !== "refund.processed") {
+      if (eventId) {
+        await tx.execute(sql2`UPDATE webhook_events SET status = 'completed', processed_at = ${nowIso} WHERE id = ${eventId};`);
+      }
+      return { success: true, status: "already_terminal_refunded", httpStatus: 200, message: "Payment is already refunded" };
+    }
+    if (eventType === "charge.dispute.remind") {
+      if (eventId) {
+        await tx.execute(sql2`UPDATE webhook_events SET status = 'completed', processed_at = ${nowIso} WHERE id = ${eventId};`);
+      }
+      return { success: true, status: "reminder_acknowledged", httpStatus: 200, message: "Dispute reminder logged idempotently" };
+    }
+    if (eventType === "charge.dispute.resolve") {
+      if (resolution === "merchant-won" || resolution === "declined-in-favor-of-merchant") {
+        await tx.update(paymentTransactions).set({
+          status: "success",
+          errorMessage: `Dispute resolved in merchant favor: ${reason || "Resolution confirmed"}`,
+          updatedAt: nowIso
+        }).where(eq(paymentTransactions.id, payment.id));
+        const lockedSubRows2 = await tx.select().from(subscriptions).where(eq(subscriptions.businessId, payment.businessId)).for("update");
+        if (lockedSubRows2.length > 0) {
+          const sub = lockedSubRows2[0];
+          const lagosToday = new Intl.DateTimeFormat("en-CA", {
+            timeZone: "Africa/Lagos",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit"
+          }).format(/* @__PURE__ */ new Date());
+          const restoredStatus = sub.currentPeriodEnd >= lagosToday ? "active" : "expired";
+          await tx.update(subscriptions).set({
+            status: restoredStatus,
+            epoch: sub.epoch + 1,
+            updatedAt: nowIso
+          }).where(eq(subscriptions.businessId, payment.businessId));
+        }
+        if (eventId) {
+          await tx.execute(sql2`UPDATE webhook_events SET status = 'completed', processed_at = ${nowIso} WHERE id = ${eventId};`);
+        }
+        return { success: true, status: "dispute_won", httpStatus: 200, message: "Dispute resolved in merchant favor; access restored" };
+      } else if (resolution === "customer-won" || resolution === "merchant-accepted" || resolution === "declined-in-favor-of-customer") {
+        await tx.update(paymentTransactions).set({
+          status: "reversed",
+          errorMessage: `Dispute lost (${resolution}): ${reason || "Funds clawed back"}`,
+          updatedAt: nowIso
+        }).where(eq(paymentTransactions.id, payment.id));
+        const lockedSubRows2 = await tx.select().from(subscriptions).where(eq(subscriptions.businessId, payment.businessId)).for("update");
+        if (lockedSubRows2.length > 0) {
+          const sub = lockedSubRows2[0];
+          await tx.update(subscriptions).set({
+            status: "past_due",
+            epoch: sub.epoch + 1,
+            updatedAt: nowIso
+          }).where(eq(subscriptions.businessId, payment.businessId));
+        }
+        if (eventId) {
+          await tx.execute(sql2`UPDATE webhook_events SET status = 'completed', processed_at = ${nowIso} WHERE id = ${eventId};`);
+        }
+        return { success: true, status: "dispute_lost", httpStatus: 200, message: "Dispute lost; payment reversed" };
+      } else {
+        if (eventId) {
+          await tx.execute(sql2`UPDATE webhook_events SET status = 'investigation_required', error_message = ${`Unknown dispute resolution: ${resolution}`} WHERE id = ${eventId};`);
+        }
+        return { success: false, status: "unknown_resolution", httpStatus: 200, message: `Unknown dispute resolution: ${resolution}` };
+      }
+    }
+    if (eventType === "refund.failed") {
+      if (eventId) {
+        await tx.execute(sql2`UPDATE webhook_events SET status = 'investigation_required', error_message = ${`Refund failed: ${reason || "Unknown provider reason"}`} WHERE id = ${eventId};`);
+      }
+      return { success: false, status: "refund_failed", httpStatus: 200, message: "Refund failed recorded for investigation" };
+    }
+    const newPaymentStatus = eventType === "refund.processed" ? "refunded" : "disputed";
+    await tx.update(paymentTransactions).set({
+      status: newPaymentStatus,
+      errorMessage: reason || `Updated by webhook event ${eventType}`,
+      updatedAt: nowIso
+    }).where(eq(paymentTransactions.id, payment.id));
+    const lockedSubRows = await tx.select().from(subscriptions).where(eq(subscriptions.businessId, payment.businessId)).for("update");
+    if (lockedSubRows.length > 0) {
+      const sub = lockedSubRows[0];
+      await tx.update(subscriptions).set({
+        status: "past_due",
+        epoch: sub.epoch + 1,
+        updatedAt: nowIso
+      }).where(eq(subscriptions.businessId, payment.businessId));
+    }
+    if (eventId) {
+      await tx.execute(sql2`UPDATE webhook_events SET status = 'completed', processed_at = ${nowIso} WHERE id = ${eventId};`);
+    }
+    return {
+      success: true,
+      status: newPaymentStatus,
+      httpStatus: 200,
+      message: `Payment successfully marked as ${newPaymentStatus} and subscription flagged for review`
+    };
+  });
+}
+
 // server.ts
-import { eq as eq3, desc, sql as sql2, and as and3, inArray } from "drizzle-orm";
+import express from "express";
+import { createServer as createViteServer } from "vite";
+import path2 from "path";
+import fs2 from "fs";
+import dotenv from "dotenv";
+import crypto5 from "crypto";
+import bcrypt2 from "bcryptjs";
+import { eq as eq4, desc, sql as sql4, and as and4, inArray } from "drizzle-orm";
 
 // src/utils/calculations.ts
 function getTodayDateString() {
@@ -1081,7 +1936,7 @@ async function seedDatabaseIfEmpty() {
 }
 
 // src/middleware/auth.ts
-import crypto from "crypto";
+import crypto4 from "crypto";
 
 // src/lib/firebase-admin.ts
 import { initializeApp, getApps } from "firebase-admin/app";
@@ -1106,7 +1961,7 @@ if (!getApps().length) {
 var adminAuth = getAuth();
 
 // src/middleware/auth.ts
-import { eq, or, lt, and, isNotNull } from "drizzle-orm";
+import { eq as eq2, or, lt, and as and2, isNotNull } from "drizzle-orm";
 
 // src/utils/permissionUtils.ts
 var ALL_PERMISSIONS = [
@@ -1241,17 +2096,17 @@ function validateOwnerProtection(allUsers, targetUserId, action, newRole) {
 
 // src/middleware/auth.ts
 function hashToken(token) {
-  return crypto.createHash("sha256").update(token).digest("hex");
+  return crypto4.createHash("sha256").update(token).digest("hex");
 }
 function generateSessionToken() {
-  const rawBytes = crypto.randomBytes(32);
+  const rawBytes = crypto4.randomBytes(32);
   const rawToken = `smt_tok_${rawBytes.toString("hex")}`;
   const tokenHash = hashToken(rawToken);
   return { rawToken, tokenHash };
 }
 async function createSession(userId, businessId, ttlDays = 7) {
   const { rawToken, tokenHash } = generateSessionToken();
-  const sessionId = `ses_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+  const sessionId = `ses_${Date.now()}_${crypto4.randomBytes(4).toString("hex")}`;
   const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1e3);
   await db.insert(sessions).values({
     id: sessionId,
@@ -1270,7 +2125,7 @@ async function createSession(userId, businessId, ttlDays = 7) {
 async function revokeSession(rawToken) {
   if (!rawToken) return false;
   const tokenHash = hashToken(rawToken);
-  const result = await db.update(sessions).set({ revokedAt: /* @__PURE__ */ new Date() }).where(eq(sessions.tokenHash, tokenHash));
+  const result = await db.update(sessions).set({ revokedAt: /* @__PURE__ */ new Date() }).where(eq2(sessions.tokenHash, tokenHash));
   return true;
 }
 async function cleanupExpiredSessions() {
@@ -1280,7 +2135,7 @@ async function cleanupExpiredSessions() {
     const result = await db.delete(sessions).where(
       or(
         lt(sessions.expiresAt, now),
-        and(isNotNull(sessions.revokedAt), lt(sessions.revokedAt, cutoff))
+        and2(isNotNull(sessions.revokedAt), lt(sessions.revokedAt, cutoff))
       )
     );
     return result?.rowCount || 0;
@@ -1302,7 +2157,7 @@ var requireAuth = async (req, res, next) => {
   }
   try {
     const tokenHash = hashToken(token);
-    const sessionRows = await db.select().from(sessions).where(eq(sessions.tokenHash, tokenHash)).limit(1);
+    const sessionRows = await db.select().from(sessions).where(eq2(sessions.tokenHash, tokenHash)).limit(1);
     if (sessionRows.length > 0) {
       const sess = sessionRows[0];
       if (sess.revokedAt) {
@@ -1313,7 +2168,7 @@ var requireAuth = async (req, res, next) => {
         res.status(401).json({ error: "Unauthorized: Session has expired. Please log in again." });
         return;
       }
-      const dbUsers = await db.select().from(users).where(eq(users.id, sess.userId)).limit(1);
+      const dbUsers = await db.select().from(users).where(eq2(users.id, sess.userId)).limit(1);
       if (dbUsers.length === 0 || !dbUsers[0].active) {
         res.status(401).json({ error: "Unauthorized: User account is inactive or not found" });
         return;
@@ -1332,7 +2187,7 @@ var requireAuth = async (req, res, next) => {
       req.businessId = u.businessId;
       req.token = token;
       req.sessionId = sess.id;
-      db.update(sessions).set({ lastUsedAt: /* @__PURE__ */ new Date() }).where(eq(sessions.id, sess.id)).catch((err) => console.error("Failed to update session lastUsedAt:", err.message));
+      db.update(sessions).set({ lastUsedAt: /* @__PURE__ */ new Date() }).where(eq2(sessions.id, sess.id)).catch((err) => console.error("Failed to update session lastUsedAt:", err.message));
       next();
       return;
     }
@@ -1345,9 +2200,9 @@ var requireAuth = async (req, res, next) => {
     const decoded = await adminAuth.verifyIdToken(token);
     const email = decoded.email || "";
     const uid = decoded.uid;
-    let dbUsers = await db.select().from(users).where(eq(users.uid, uid)).limit(1);
+    let dbUsers = await db.select().from(users).where(eq2(users.uid, uid)).limit(1);
     if (dbUsers.length === 0 && email) {
-      dbUsers = await db.select().from(users).where(eq(users.email, email)).limit(1);
+      dbUsers = await db.select().from(users).where(eq2(users.email, email)).limit(1);
     }
     if (dbUsers.length > 0) {
       const u = dbUsers[0];
@@ -1394,145 +2249,8 @@ var requirePermission = (permission) => {
   };
 };
 
-// src/config/plans.ts
-var KOBO_PER_NAIRA = 100;
-var PLANS = {
-  free: {
-    id: "free",
-    name: "Free",
-    tagline: "Essential bookkeeping for single-operator kiosks and startups",
-    monthlyPriceKobo: 0,
-    annualPriceKobo: 0,
-    monthlyPriceNgn: 0,
-    annualPriceNgn: 0,
-    entitlements: {
-      maxUsers: 1,
-      maxSalesPerMonth: 50,
-      maxExpensesPerMonth: 50,
-      maxCustomers: 30,
-      maxProducts: 25,
-      multiUserRbac: false,
-      debtTracking: true,
-      thermalReceipts: true,
-      recurringExpenses: false,
-      dailyReconciliation: false,
-      auditTrail: false,
-      dataExport: false,
-      whatsappReminders: false
-    },
-    isAvailable: true,
-    isFuture: false,
-    highlight: false,
-    recommendedFor: "Solo entrepreneurs, micro-retailers, and new trade kiosks starting their digital records."
-  },
-  starter: {
-    id: "starter",
-    name: "Starter",
-    tagline: "Empowering busy solo shops with higher limits and recurring bills",
-    monthlyPriceKobo: 2500 * KOBO_PER_NAIRA,
-    // 250,000 kobo (₦2,500)
-    annualPriceKobo: 25e3 * KOBO_PER_NAIRA,
-    // 2,500,000 kobo (₦25,000 - equivalent to 10 months / 2 months free)
-    monthlyPriceNgn: 2500,
-    annualPriceNgn: 25e3,
-    entitlements: {
-      maxUsers: 1,
-      maxSalesPerMonth: 500,
-      maxExpensesPerMonth: 500,
-      maxCustomers: 500,
-      maxProducts: 500,
-      multiUserRbac: false,
-      debtTracking: true,
-      thermalReceipts: true,
-      recurringExpenses: true,
-      dailyReconciliation: true,
-      auditTrail: false,
-      dataExport: true,
-      whatsappReminders: false
-    },
-    isAvailable: true,
-    isFuture: false,
-    highlight: true,
-    recommendedFor: "Active solo operators needing higher volume, scheduled subscriptions, and CSV exports."
-  },
-  business: {
-    id: "business",
-    name: "Business",
-    tagline: "Full multi-user team collaboration, cash drawer auditing & WhatsApp reminders",
-    monthlyPriceKobo: 5e3 * KOBO_PER_NAIRA,
-    // 500,000 kobo (₦5,000)
-    annualPriceKobo: 5e4 * KOBO_PER_NAIRA,
-    // 5,000,000 kobo (₦50,000 - equivalent to 10 months / 2 months free)
-    monthlyPriceNgn: 5e3,
-    annualPriceNgn: 5e4,
-    entitlements: {
-      maxUsers: 5,
-      maxSalesPerMonth: 5e3,
-      // Fair-use volume for growing SMEs
-      maxExpensesPerMonth: 5e3,
-      maxCustomers: 5e3,
-      maxProducts: 5e3,
-      multiUserRbac: true,
-      debtTracking: true,
-      thermalReceipts: true,
-      recurringExpenses: true,
-      dailyReconciliation: true,
-      auditTrail: true,
-      dataExport: true,
-      whatsappReminders: true
-    },
-    isAvailable: true,
-    isFuture: false,
-    highlight: false,
-    recommendedFor: "Growing SMEs, ICT centres, supermarkets, and stores with cashiers and managers."
-  },
-  business_plus: {
-    id: "business_plus",
-    name: "Business Plus",
-    tagline: "Multi-branch operations, automated integrations, and priority SLA",
-    monthlyPriceKobo: 1e4 * KOBO_PER_NAIRA,
-    // 1,000,000 kobo (₦10,000)
-    annualPriceKobo: 1e5 * KOBO_PER_NAIRA,
-    // 10,000,000 kobo (₦100,000)
-    monthlyPriceNgn: 1e4,
-    annualPriceNgn: 1e5,
-    entitlements: {
-      maxUsers: 25,
-      maxSalesPerMonth: 5e4,
-      maxExpensesPerMonth: 5e4,
-      maxCustomers: 5e4,
-      maxProducts: 5e4,
-      multiUserRbac: true,
-      debtTracking: true,
-      thermalReceipts: true,
-      recurringExpenses: true,
-      dailyReconciliation: true,
-      auditTrail: true,
-      dataExport: true,
-      whatsappReminders: true
-    },
-    isAvailable: false,
-    // NOT available for purchase at launch
-    isFuture: true,
-    highlight: false,
-    recommendedFor: "Multi-location businesses and large vocational academies (Future Offering)."
-  }
-};
-var calculateAnnualSavingsNgn = (planId) => {
-  const plan = PLANS[planId];
-  if (!plan || plan.monthlyPriceNgn === 0) return 0;
-  const twelveMonthsMonthly = plan.monthlyPriceNgn * 12;
-  return twelveMonthsMonthly - plan.annualPriceNgn;
-};
-var resolvePlan = (planId) => {
-  if (planId && planId in PLANS) {
-    return PLANS[planId];
-  }
-  return PLANS.free;
-};
-
 // src/services/subscriptionService.ts
-import { eq as eq2, and as and2, gte, lte, sql } from "drizzle-orm";
+import { eq as eq3, and as and3, gte, lte, sql as sql3 } from "drizzle-orm";
 var getCurrentMonthDateRange = () => {
   const lagosFormatter = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Africa/Lagos",
@@ -1551,7 +2269,7 @@ var getCurrentMonthDateRange = () => {
   return { firstDay, lastDay, cycleKey };
 };
 var getBusinessSubscription = async (businessId, executor = db) => {
-  const rows = await executor.select().from(subscriptions).where(eq2(subscriptions.businessId, businessId)).limit(1);
+  const rows = await executor.select().from(subscriptions).where(eq3(subscriptions.businessId, businessId)).limit(1);
   if (rows.length > 0) {
     const row = rows[0];
     return {
@@ -1593,23 +2311,23 @@ var getBusinessSubscription = async (businessId, executor = db) => {
 };
 var getBusinessUsage = async (businessId, executor = db) => {
   const { firstDay, lastDay, cycleKey } = getCurrentMonthDateRange();
-  const usersResult = await executor.select({ count: sql`count(*)::int` }).from(users).where(and2(eq2(users.businessId, businessId), eq2(users.active, true)));
+  const usersResult = await executor.select({ count: sql3`count(*)::int` }).from(users).where(and3(eq3(users.businessId, businessId), eq3(users.active, true)));
   const userCount = usersResult[0]?.count || 0;
-  const customersResult = await executor.select({ count: sql`count(*)::int` }).from(customers).where(eq2(customers.businessId, businessId));
+  const customersResult = await executor.select({ count: sql3`count(*)::int` }).from(customers).where(eq3(customers.businessId, businessId));
   const customerCount = customersResult[0]?.count || 0;
-  const productsResult = await executor.select({ count: sql`count(*)::int` }).from(products).where(and2(eq2(products.businessId, businessId), eq2(products.active, true)));
+  const productsResult = await executor.select({ count: sql3`count(*)::int` }).from(products).where(and3(eq3(products.businessId, businessId), eq3(products.active, true)));
   const productCount = productsResult[0]?.count || 0;
-  const salesResult = await executor.select({ count: sql`count(*)::int` }).from(sales).where(
-    and2(
-      eq2(sales.businessId, businessId),
+  const salesResult = await executor.select({ count: sql3`count(*)::int` }).from(sales).where(
+    and3(
+      eq3(sales.businessId, businessId),
       gte(sales.date, firstDay),
       lte(sales.date, lastDay)
     )
   );
   const monthlySalesCount = salesResult[0]?.count || 0;
-  const expensesResult = await executor.select({ count: sql`count(*)::int` }).from(expenses).where(
-    and2(
-      eq2(expenses.businessId, businessId),
+  const expensesResult = await executor.select({ count: sql3`count(*)::int` }).from(expenses).where(
+    and3(
+      eq3(expenses.businessId, businessId),
       gte(expenses.date, firstDay),
       lte(expenses.date, lastDay)
     )
@@ -1624,9 +2342,27 @@ var getBusinessUsage = async (businessId, executor = db) => {
     billingCycleMonth: cycleKey
   };
 };
+var getEffectivePlan = (subscription) => {
+  if (subscription.planId === "free") {
+    return PLANS.free;
+  }
+  if (subscription.status !== "active") {
+    return PLANS.free;
+  }
+  const lagosToday = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Lagos",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(/* @__PURE__ */ new Date());
+  if (subscription.currentPeriodEnd < lagosToday) {
+    return PLANS.free;
+  }
+  return resolvePlan(subscription.planId);
+};
 var checkPlanLimit = async (businessId, limitType, executor = db) => {
   const subscription = await getBusinessSubscription(businessId, executor);
-  const plan = resolvePlan(subscription.planId);
+  const plan = getEffectivePlan(subscription);
   const usage = await getBusinessUsage(businessId, executor);
   let currentUsage = 0;
   let maxAllowed = 0;
@@ -1680,7 +2416,7 @@ var checkPlanLimit = async (businessId, limitType, executor = db) => {
 };
 var checkFeatureEntitlement = async (businessId, feature) => {
   const subscription = await getBusinessSubscription(businessId);
-  const plan = resolvePlan(subscription.planId);
+  const plan = getEffectivePlan(subscription);
   const allowed = Boolean(plan.entitlements[feature]);
   return {
     allowed,
@@ -1690,7 +2426,7 @@ var checkFeatureEntitlement = async (businessId, feature) => {
 };
 var getFullSubscriptionStatus = async (businessId) => {
   const subscription = await getBusinessSubscription(businessId);
-  const plan = resolvePlan(subscription.planId);
+  const plan = getEffectivePlan(subscription);
   const usage = await getBusinessUsage(businessId);
   return {
     subscription,
@@ -1758,8 +2494,25 @@ var activePaymentProvider = new UnconfiguredPaymentProvider();
 // server.ts
 dotenv.config();
 var app = express();
-var PORT = Number(process.env.PORT) || 3e3;
+function resolveServerPort(env = process.env) {
+  const parsePort = (val) => {
+    if (!val) return void 0;
+    const parsed = parseInt(val, 10);
+    return !isNaN(parsed) && parsed > 0 && parsed <= 65535 ? parsed : void 0;
+  };
+  return parsePort(env.APP_PORT) ?? parsePort(env.DEFAULT_APP_PORT) ?? parsePort(env.PORT) ?? 3e3;
+}
+var PORT = resolveServerPort();
 var isProduction = process.env.NODE_ENV === "production";
+try {
+  const encConfig = validateEncryptionConfig(isProduction);
+  if (!encConfig.isValid && !isProduction) {
+    console.info("\u2139\uFE0F Development notice: PAYSTACK_TOKEN_ENCRYPTION_KEY is unconfigured or non-production. Local development mode active.");
+  }
+} catch (err) {
+  console.error("CRITICAL STARTUP ERROR:", err.message);
+  process.exit(1);
+}
 var isShuttingDown = false;
 var activeRequestsCount = 0;
 var httpServer = null;
@@ -1779,7 +2532,192 @@ app.use((req, res, next) => {
   });
   next();
 });
-app.use(express.json({ limit: "10mb" }));
+app.use(
+  express.json({
+    limit: "10mb",
+    verify: (req, _res, buf) => {
+      req.rawBody = buf;
+    }
+  })
+);
+app.post("/api/subscription/checkout", requireAuth, requirePermission("manage_business"), async (req, res) => {
+  const { planId, interval, callbackUrl } = req.body;
+  if (!planId || planId !== "starter" && planId !== "business") {
+    res.status(400).json({ error: "Valid plan identifier is required (starter or business)" });
+    return;
+  }
+  const billingInterval = interval === "annual" ? "annual" : "monthly";
+  try {
+    const session = await createCheckoutSession({
+      businessId: req.businessId,
+      userId: req.user.id,
+      userEmail: req.user.email,
+      planId,
+      interval: billingInterval,
+      callbackUrl
+    });
+    res.json({ success: true, ...session });
+  } catch (err) {
+    console.error("Checkout creation failed:", err);
+    res.status(500).json({ error: err.message || "Failed to create checkout session" });
+  }
+});
+app.get("/api/subscription/verify/:reference", requireAuth, requirePermission("manage_business"), async (req, res) => {
+  const { reference } = req.params;
+  if (!reference) {
+    res.status(400).json({ error: "Payment reference is required" });
+    return;
+  }
+  try {
+    const pendingRows = await db.select().from(paymentTransactions).where(eq4(paymentTransactions.reference, reference)).limit(1);
+    if (pendingRows.length === 0) {
+      res.status(404).json({ error: "Checkout reference not found" });
+      return;
+    }
+    if (pendingRows[0].businessId !== req.businessId) {
+      res.status(403).json({ error: "Cross-tenant access forbidden" });
+      return;
+    }
+    const verification = await paystackClient.verifyTransaction(reference);
+    if (!verification.verified || verification.status !== "success") {
+      res.status(400).json({
+        success: false,
+        status: verification.status,
+        message: "Payment has not been confirmed as successful by the provider."
+      });
+      return;
+    }
+    const claimResult = await claimVerifiedPayment(verification);
+    res.status(claimResult.httpStatus).json(claimResult);
+  } catch (err) {
+    console.error("Verification error:", err);
+    res.status(500).json({ error: err.message || "Payment verification failed" });
+  }
+});
+app.post("/api/subscription/cancel", requireAuth, requirePermission("manage_business"), async (req, res) => {
+  try {
+    const result = await cancelBusinessSubscription(req.businessId);
+    res.json(result);
+  } catch (err) {
+    console.error("Subscription cancellation failed:", err);
+    res.status(500).json({ error: err.message || "Failed to cancel subscription" });
+  }
+});
+app.post("/api/webhooks/paystack", async (req, res) => {
+  const signatureHeader = req.headers["x-paystack-signature"];
+  const rawBody = req.rawBody;
+  if (!paystackClient.verifyWebhookSignature(rawBody, signatureHeader)) {
+    res.status(401).send("Invalid signature");
+    return;
+  }
+  const eventPayload = req.body;
+  const eventType = eventPayload?.event;
+  const data = eventPayload?.data;
+  if (!eventType || typeof eventType !== "string" || !data || typeof data !== "object") {
+    res.status(400).send("Malformed payload rejected");
+    return;
+  }
+  const isDisputeEvent = typeof eventType === "string" && eventType.startsWith("charge.dispute.");
+  const isRefundEvent = typeof eventType === "string" && eventType.startsWith("refund.");
+  const nestedTx = data.transaction || null;
+  const disputeId = isDisputeEvent && data.id != null ? String(data.id) : null;
+  const refundId = isRefundEvent && data.id != null ? String(data.id) : null;
+  const providerTxId = isDisputeEvent ? nestedTx?.id != null ? String(nestedTx.id) : null : data.id != null ? String(data.id) : null;
+  const reference = isDisputeEvent ? nestedTx?.reference || null : isRefundEvent ? data.transaction_reference || data.reference || null : data.reference || null;
+  const subCode = data.subscription?.subscription_code || data.subscription_code || null;
+  let identitySeed = "";
+  if (disputeId) {
+    identitySeed = `disp:${disputeId}`;
+  } else if (refundId) {
+    identitySeed = `refn:${refundId}`;
+  } else if (providerTxId) {
+    identitySeed = `tx:${providerTxId}`;
+  } else if (reference) {
+    identitySeed = `ref:${reference}`;
+  } else if (subCode) {
+    identitySeed = `sub:${subCode}`;
+  } else {
+    identitySeed = `body:${crypto5.createHash("sha256").update(rawBody || JSON.stringify(eventPayload)).digest("hex").substring(0, 32)}`;
+  }
+  const eventId = crypto5.createHash("sha256").update(`${eventType}:${identitySeed}`).digest("hex");
+  const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+  try {
+    await db.execute(sql4`
+      INSERT INTO webhook_events (id, event_type, reference, status, attempts, first_received_at)
+      VALUES (${eventId}, ${eventType}, ${reference || subCode || "none"}, 'processing', 1, ${nowIso})
+      ON CONFLICT (id) DO UPDATE SET attempts = webhook_events.attempts + 1;
+    `);
+    const eventRows = await db.execute(sql4`SELECT status FROM webhook_events WHERE id = ${eventId} FOR UPDATE;`);
+    const currentStatus = eventRows.rows[0]?.status;
+    if (currentStatus === "completed") {
+      res.status(200).send("Duplicate acknowledged");
+      return;
+    }
+    if (currentStatus === "investigation_required") {
+      res.status(200).send("Permanent state acknowledged");
+      return;
+    }
+    if (eventType === "charge.success") {
+      if (!reference) {
+        await db.execute(sql4`UPDATE webhook_events SET status = 'investigation_required', error_message = 'charge.success event missing reference' WHERE id = ${eventId};`);
+        res.status(200).send("Event missing reference");
+        return;
+      }
+      let verification;
+      try {
+        verification = await paystackClient.verifyTransaction(reference);
+      } catch (err) {
+        res.status(500).send("Transient verification error");
+        return;
+      }
+      if (verification.status === "pending") {
+        res.status(200).send("Transaction pending confirmation");
+        return;
+      }
+      if (!verification.verified || verification.status !== "success") {
+        await db.execute(sql4`UPDATE webhook_events SET status = 'investigation_required', error_message = 'Verification API not successful' WHERE id = ${eventId};`);
+        res.status(200).send("Verification failed permanently");
+        return;
+      }
+      const result = await claimVerifiedPayment(verification, eventId);
+      res.status(result.httpStatus).send(result.message);
+      return;
+    }
+    if (eventType === "invoice.payment_failed") {
+      if (subCode) {
+        await db.update(subscriptions).set({ status: "past_due", updatedAt: nowIso }).where(eq4(subscriptions.providerSubscriptionId, subCode));
+      }
+      await db.execute(sql4`UPDATE webhook_events SET status = 'completed', processed_at = ${nowIso} WHERE id = ${eventId};`);
+      res.status(200).send("Invoice failure processed");
+      return;
+    }
+    if (eventType === "subscription.disable" || eventType === "subscription.not_renew") {
+      if (subCode) {
+        await db.update(subscriptions).set({ cancelAtPeriodEnd: true, updatedAt: nowIso }).where(eq4(subscriptions.providerSubscriptionId, subCode));
+      }
+      await db.execute(sql4`UPDATE webhook_events SET status = 'completed', processed_at = ${nowIso} WHERE id = ${eventId};`);
+      res.status(200).send("Subscription cancellation scheduled");
+      return;
+    }
+    if (eventType === "charge.dispute.create" || eventType === "charge.dispute.remind" || eventType === "charge.dispute.resolve" || eventType === "refund.processed" || eventType === "refund.failed") {
+      const result = await processPaymentDisputeOrRefund({
+        reference: reference || "none",
+        providerTransactionId: providerTxId || void 0,
+        eventType,
+        resolution: data.resolution || void 0,
+        reason: data.reason || data.description || data.resolution || `Webhook ${eventType}`,
+        eventId
+      });
+      res.status(result.httpStatus).send(result.message);
+      return;
+    }
+    await db.execute(sql4`UPDATE webhook_events SET status = 'completed', processed_at = ${nowIso} WHERE id = ${eventId};`);
+    res.status(200).send("Event acknowledged");
+  } catch (err) {
+    console.error("Webhook processing error:", err);
+    res.status(500).send("Internal server error during webhook ingestion");
+  }
+});
 app.get("/api/health", async (_req, res) => {
   if (isShuttingDown) {
     res.status(503).json({
@@ -1846,7 +2784,7 @@ app.post("/api/auth/login", async (req, res) => {
     return;
   }
   try {
-    const userList = await db.select().from(users).where(eq3(users.email, email.trim().toLowerCase())).limit(1);
+    const userList = await db.select().from(users).where(eq4(users.email, email.trim().toLowerCase())).limit(1);
     if (userList.length === 0) {
       res.status(401).json({ error: "Invalid email or password" });
       return;
@@ -1864,7 +2802,7 @@ app.post("/api/auth/login", async (req, res) => {
       }
     }
     const { token } = await createSession(u.id, u.businessId, 7);
-    const businessList = await db.select().from(businesses).where(eq3(businesses.id, u.businessId)).limit(1);
+    const businessList = await db.select().from(businesses).where(eq4(businesses.id, u.businessId)).limit(1);
     await logServerAudit(u.businessId, u.id, u.name, u.role, "login", "user", u.id, `User logged in via server session`);
     res.json({
       token,
@@ -1894,7 +2832,7 @@ app.post("/api/auth/forgot-password", async (req, res) => {
   }
   try {
     const cleanEmail = email.trim().toLowerCase();
-    const userList = await db.select().from(users).where(eq3(users.email, cleanEmail)).limit(1);
+    const userList = await db.select().from(users).where(eq4(users.email, cleanEmail)).limit(1);
     if (userList.length === 0) {
       res.json({
         success: true,
@@ -1903,7 +2841,7 @@ app.post("/api/auth/forgot-password", async (req, res) => {
       return;
     }
     const u = userList[0];
-    const token = `smt_rst_${crypto2.randomBytes(24).toString("hex")}`;
+    const token = `smt_rst_${crypto5.randomBytes(24).toString("hex")}`;
     passwordResetTokens.set(token, {
       userId: u.id,
       expiresAt: Date.now() + 60 * 60 * 1e3
@@ -1946,9 +2884,9 @@ app.post("/api/auth/reset-password", async (req, res) => {
   }
   try {
     const passwordHash = bcrypt2.hashSync(newPassword, 10);
-    await db.update(users).set({ passwordHash, updatedAt: /* @__PURE__ */ new Date() }).where(eq3(users.id, resetEntry.userId));
+    await db.update(users).set({ passwordHash, updatedAt: /* @__PURE__ */ new Date() }).where(eq4(users.id, resetEntry.userId));
     passwordResetTokens.delete(token);
-    const userList = await db.select().from(users).where(eq3(users.id, resetEntry.userId)).limit(1);
+    const userList = await db.select().from(users).where(eq4(users.id, resetEntry.userId)).limit(1);
     if (userList.length > 0) {
       const u = userList[0];
       await logServerAudit(
@@ -1998,7 +2936,7 @@ app.post(["/api/auth/register", "/api/auth/signup"], async (req, res) => {
   }
   const cleanEmail = email.trim().toLowerCase();
   try {
-    const existing = await db.select().from(users).where(eq3(users.email, cleanEmail)).limit(1);
+    const existing = await db.select().from(users).where(eq4(users.email, cleanEmail)).limit(1);
     if (existing.length > 0) {
       res.status(400).json({ error: "An account with this email address already exists. Please sign in." });
       return;
@@ -2023,7 +2961,7 @@ app.post(["/api/auth/register", "/api/auth/signup"], async (req, res) => {
         createdAt: /* @__PURE__ */ new Date(),
         updatedAt: /* @__PURE__ */ new Date()
       });
-      const insertedBiz = await db.select().from(businesses).where(eq3(businesses.id, newBizId)).limit(1);
+      const insertedBiz = await db.select().from(businesses).where(eq4(businesses.id, newBizId)).limit(1);
       businessRecord = insertedBiz[0];
       bizId = newBizId;
     } else {
@@ -2046,7 +2984,7 @@ app.post(["/api/auth/register", "/api/auth/signup"], async (req, res) => {
       createdAt: /* @__PURE__ */ new Date(),
       updatedAt: /* @__PURE__ */ new Date()
     });
-    const createdList = await db.select().from(users).where(eq3(users.id, newId)).limit(1);
+    const createdList = await db.select().from(users).where(eq4(users.id, newId)).limit(1);
     const u = createdList[0];
     const { token } = await createSession(u.id, u.businessId, 7);
     await logServerAudit(u.businessId, u.id, u.name, u.role, "register", "user", u.id, `User registered new account: ${u.name} (${u.role})`);
@@ -2108,12 +3046,12 @@ app.post("/api/auth/firebase-login", async (req, res) => {
     }
     let userList = [];
     if (uid) {
-      userList = await db.select().from(users).where(eq3(users.uid, uid)).limit(1);
+      userList = await db.select().from(users).where(eq4(users.uid, uid)).limit(1);
     }
     if (userList.length === 0 && email) {
-      userList = await db.select().from(users).where(eq3(users.email, email)).limit(1);
+      userList = await db.select().from(users).where(eq4(users.email, email)).limit(1);
       if (userList.length > 0 && uid) {
-        await db.update(users).set({ uid }).where(eq3(users.id, userList[0].id));
+        await db.update(users).set({ uid }).where(eq4(users.id, userList[0].id));
       }
     }
     let u;
@@ -2136,11 +3074,11 @@ app.post("/api/auth/firebase-login", async (req, res) => {
         role: "manager",
         active: true
       });
-      const created = await db.select().from(users).where(eq3(users.id, newId)).limit(1);
+      const created = await db.select().from(users).where(eq4(users.id, newId)).limit(1);
       u = created[0];
     }
     const { token } = await createSession(u.id, u.businessId, 7);
-    const businessList = await db.select().from(businesses).where(eq3(businesses.id, u.businessId)).limit(1);
+    const businessList = await db.select().from(businesses).where(eq4(businesses.id, u.businessId)).limit(1);
     await logServerAudit(u.businessId, u.id, u.name, u.role, "login", "user", u.id, `User authenticated via Google`);
     res.json({
       token,
@@ -2163,7 +3101,7 @@ app.post("/api/auth/firebase-login", async (req, res) => {
 });
 app.get("/api/auth/me", requireAuth, async (req, res) => {
   try {
-    const biz = await db.select().from(businesses).where(eq3(businesses.id, req.businessId)).limit(1);
+    const biz = await db.select().from(businesses).where(eq4(businesses.id, req.businessId)).limit(1);
     res.json({
       user: req.user,
       business: formatBusinessRecord(biz[0])
@@ -2184,7 +3122,7 @@ app.post("/api/auth/logout", requireAuth, async (req, res) => {
 });
 app.get("/api/business", requireAuth, async (req, res) => {
   try {
-    const biz = await db.select().from(businesses).where(eq3(businesses.id, req.businessId)).limit(1);
+    const biz = await db.select().from(businesses).where(eq4(businesses.id, req.businessId)).limit(1);
     res.json(formatBusinessRecord(biz[0]));
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch business" });
@@ -2211,8 +3149,8 @@ app.put("/api/business", requireAuth, requirePermission("manage_business"), asyn
       paymentInstructions: data.paymentInstructions !== void 0 ? data.paymentInstructions : void 0,
       includeBankOnReceipts: Boolean(data.includeBankDetailsInReminders ?? data.includeBankOnReceipts ?? true),
       updatedAt: /* @__PURE__ */ new Date()
-    }).where(eq3(businesses.id, req.businessId));
-    const updated = await db.select().from(businesses).where(eq3(businesses.id, req.businessId)).limit(1);
+    }).where(eq4(businesses.id, req.businessId));
+    const updated = await db.select().from(businesses).where(eq4(businesses.id, req.businessId)).limit(1);
     await logServerAudit(req.businessId, req.user.id, req.user.name, req.user.role, "update", "settings", req.businessId, "Updated business profile and financial settings");
     res.json(formatBusinessRecord(updated[0]));
   } catch (err) {
@@ -2222,28 +3160,28 @@ app.put("/api/business", requireAuth, requirePermission("manage_business"), asyn
 app.post("/api/business/reset-ledger", requireAuth, requirePermission("manage_business"), async (req, res) => {
   try {
     await db.transaction(async (tx) => {
-      const bizSales = await tx.select({ id: sales.id }).from(sales).where(eq3(sales.businessId, req.businessId));
+      const bizSales = await tx.select({ id: sales.id }).from(sales).where(eq4(sales.businessId, req.businessId));
       if (bizSales.length > 0) {
         const saleIds = bizSales.map((s) => s.id);
         await tx.delete(saleItems).where(inArray(saleItems.saleId, saleIds));
-        await tx.delete(sales).where(eq3(sales.businessId, req.businessId));
+        await tx.delete(sales).where(eq4(sales.businessId, req.businessId));
       }
-      await tx.delete(debtPayments).where(eq3(debtPayments.businessId, req.businessId));
-      await tx.delete(expenses).where(eq3(expenses.businessId, req.businessId));
-      await tx.delete(payables).where(eq3(payables.businessId, req.businessId));
-      await tx.delete(dailyReconciliations).where(eq3(dailyReconciliations.businessId, req.businessId));
-      await tx.delete(auditLogs).where(eq3(auditLogs.businessId, req.businessId));
+      await tx.delete(debtPayments).where(eq4(debtPayments.businessId, req.businessId));
+      await tx.delete(expenses).where(eq4(expenses.businessId, req.businessId));
+      await tx.delete(payables).where(eq4(payables.businessId, req.businessId));
+      await tx.delete(dailyReconciliations).where(eq4(dailyReconciliations.businessId, req.businessId));
+      await tx.delete(auditLogs).where(eq4(auditLogs.businessId, req.businessId));
       await tx.update(customers).set({
         totalPurchases: "0.00",
         totalPaid: "0.00",
         outstandingDebt: "0.00"
-      }).where(eq3(customers.businessId, req.businessId));
+      }).where(eq4(customers.businessId, req.businessId));
       await tx.update(products).set({
-        currentStock: sql2`opening_stock`
-      }).where(eq3(products.businessId, req.businessId));
+        currentStock: sql4`opening_stock`
+      }).where(eq4(products.businessId, req.businessId));
       await tx.update(businesses).set({
         lastInvoiceSequence: 100
-      }).where(eq3(businesses.id, req.businessId));
+      }).where(eq4(businesses.id, req.businessId));
     });
     await logServerAudit(req.businessId, req.user.id, req.user.name, req.user.role, "reset", "system", req.businessId, "System ledger reset to zero for live operational usage");
     res.json({ success: true, message: "Ledger and dashboard entries reset to zero successfully" });
@@ -2254,7 +3192,7 @@ app.post("/api/business/reset-ledger", requireAuth, requirePermission("manage_bu
 });
 app.get("/api/users", requireAuth, async (req, res) => {
   try {
-    const userList = await db.select().from(users).where(eq3(users.businessId, req.businessId));
+    const userList = await db.select().from(users).where(eq4(users.businessId, req.businessId));
     const safeUsers = userList.map((u) => ({
       id: u.id,
       businessId: u.businessId,
@@ -2291,7 +3229,7 @@ app.post("/api/users", requireAuth, requirePermission("manage_users"), async (re
       });
       return;
     }
-    const existing = await db.select().from(users).where(eq3(users.email, email.trim().toLowerCase())).limit(1);
+    const existing = await db.select().from(users).where(eq4(users.email, email.trim().toLowerCase())).limit(1);
     if (existing.length > 0) {
       res.status(400).json({ error: "A team member with this email already exists" });
       return;
@@ -2319,13 +3257,13 @@ app.put("/api/users/:id/role", requireAuth, requirePermission("manage_users"), a
   const targetId = req.params.id;
   const { role } = req.body;
   try {
-    const allUsers = await db.select().from(users).where(eq3(users.businessId, req.businessId));
+    const allUsers = await db.select().from(users).where(eq4(users.businessId, req.businessId));
     const protection = validateOwnerProtection(allUsers, targetId, "change_role", role);
     if (!protection.allowed) {
       res.status(403).json({ error: protection.reason });
       return;
     }
-    await db.update(users).set({ role, updatedAt: /* @__PURE__ */ new Date() }).where(eq3(users.id, targetId));
+    await db.update(users).set({ role, updatedAt: /* @__PURE__ */ new Date() }).where(eq4(users.id, targetId));
     await logServerAudit(req.businessId, req.user.id, req.user.name, req.user.role, "update", "user", targetId, `Changed role of user ${targetId} to ${role}`);
     res.json({ success: true });
   } catch (err) {
@@ -2336,7 +3274,7 @@ app.put("/api/users/:id/permissions", requireAuth, requirePermission("manage_per
   const targetId = req.params.id;
   const { permissions } = req.body;
   try {
-    const target = await db.select().from(users).where(and3(eq3(users.id, targetId), eq3(users.businessId, req.businessId))).limit(1);
+    const target = await db.select().from(users).where(and4(eq4(users.id, targetId), eq4(users.businessId, req.businessId))).limit(1);
     if (target.length === 0) {
       res.status(403).json({ error: "User not found in your business or access denied" });
       return;
@@ -2345,7 +3283,7 @@ app.put("/api/users/:id/permissions", requireAuth, requirePermission("manage_per
       res.status(400).json({ error: "Owner possesses all capabilities permanently." });
       return;
     }
-    await db.update(users).set({ permissions, updatedAt: /* @__PURE__ */ new Date() }).where(and3(eq3(users.id, targetId), eq3(users.businessId, req.businessId)));
+    await db.update(users).set({ permissions, updatedAt: /* @__PURE__ */ new Date() }).where(and4(eq4(users.id, targetId), eq4(users.businessId, req.businessId)));
     await logServerAudit(req.businessId, req.user.id, req.user.name, req.user.role, "update", "permissions", targetId, `Customized permissions for ${target[0].name}`);
     res.json({ success: true });
   } catch (err) {
@@ -2355,13 +3293,13 @@ app.put("/api/users/:id/permissions", requireAuth, requirePermission("manage_per
 app.delete("/api/users/:id", requireAuth, requirePermission("manage_users"), async (req, res) => {
   const targetId = req.params.id;
   try {
-    const allUsers = await db.select().from(users).where(eq3(users.businessId, req.businessId));
+    const allUsers = await db.select().from(users).where(eq4(users.businessId, req.businessId));
     const protection = validateOwnerProtection(allUsers, targetId, "delete");
     if (!protection.allowed) {
       res.status(403).json({ error: protection.reason });
       return;
     }
-    await db.delete(users).where(eq3(users.id, targetId));
+    await db.delete(users).where(eq4(users.id, targetId));
     await logServerAudit(req.businessId, req.user.id, req.user.name, req.user.role, "delete", "user", targetId, `Removed team member ${targetId}`);
     res.json({ success: true });
   } catch (err) {
@@ -2370,7 +3308,7 @@ app.delete("/api/users/:id", requireAuth, requirePermission("manage_users"), asy
 });
 app.get("/api/customers", requireAuth, async (req, res) => {
   try {
-    const list = await db.select().from(customers).where(eq3(customers.businessId, req.businessId)).orderBy(desc(customers.updatedAt));
+    const list = await db.select().from(customers).where(eq4(customers.businessId, req.businessId)).orderBy(desc(customers.updatedAt));
     const parsed = list.map((c) => ({
       ...c,
       totalPurchases: Number(c.totalPurchases),
@@ -2436,7 +3374,7 @@ app.put("/api/customers/:id", requireAuth, requirePermission("edit_customer"), a
       address: address?.trim() || null,
       notes: notes?.trim() || null,
       updatedAt: now
-    }).where(and3(eq3(customers.id, id), eq3(customers.businessId, req.businessId)));
+    }).where(and4(eq4(customers.id, id), eq4(customers.businessId, req.businessId)));
     await logServerAudit(req.businessId, req.user.id, req.user.name, req.user.role, "update", "customer", id, `Updated customer: ${name}`);
     res.json({ success: true });
   } catch (err) {
@@ -2446,7 +3384,7 @@ app.put("/api/customers/:id", requireAuth, requirePermission("edit_customer"), a
 app.delete("/api/customers/:id", requireAuth, requirePermission("delete_customer"), async (req, res) => {
   const id = req.params.id;
   try {
-    await db.delete(customers).where(and3(eq3(customers.id, id), eq3(customers.businessId, req.businessId)));
+    await db.delete(customers).where(and4(eq4(customers.id, id), eq4(customers.businessId, req.businessId)));
     await logServerAudit(req.businessId, req.user.id, req.user.name, req.user.role, "delete", "customer", id, `Deleted customer ${id}`);
     res.json({ success: true });
   } catch (err) {
@@ -2455,7 +3393,7 @@ app.delete("/api/customers/:id", requireAuth, requirePermission("delete_customer
 });
 app.get("/api/products", requireAuth, async (req, res) => {
   try {
-    const list = await db.select().from(products).where(eq3(products.businessId, req.businessId)).orderBy(desc(products.updatedAt));
+    const list = await db.select().from(products).where(eq4(products.businessId, req.businessId)).orderBy(desc(products.updatedAt));
     const parsed = list.map((p) => ({
       ...p,
       sellingPrice: Number(p.sellingPrice),
@@ -2528,7 +3466,7 @@ app.put("/api/products/:id", requireAuth, requirePermission("edit_product"), asy
       minStockLevel: data.minStockLevel !== void 0 ? Number(data.minStockLevel) : void 0,
       active: data.active !== void 0 ? Boolean(data.active) : void 0,
       updatedAt: now
-    }).where(and3(eq3(products.id, id), eq3(products.businessId, req.businessId)));
+    }).where(and4(eq4(products.id, id), eq4(products.businessId, req.businessId)));
     await logServerAudit(req.businessId, req.user.id, req.user.name, req.user.role, "update", "product", id, `Updated product: ${data.name}`);
     res.json({ success: true });
   } catch (err) {
@@ -2538,7 +3476,7 @@ app.put("/api/products/:id", requireAuth, requirePermission("edit_product"), asy
 app.delete("/api/products/:id", requireAuth, requirePermission("delete_product"), async (req, res) => {
   const id = req.params.id;
   try {
-    await db.delete(products).where(and3(eq3(products.id, id), eq3(products.businessId, req.businessId)));
+    await db.delete(products).where(and4(eq4(products.id, id), eq4(products.businessId, req.businessId)));
     await logServerAudit(req.businessId, req.user.id, req.user.name, req.user.role, "delete", "product", id, `Deleted product ${id}`);
     res.json({ success: true });
   } catch (err) {
@@ -2548,7 +3486,7 @@ app.delete("/api/products/:id", requireAuth, requirePermission("delete_product")
 app.get("/api/sales", requireAuth, async (req, res) => {
   try {
     const canViewProfit = req.user ? hasPermission(req.user, "view_profit") : false;
-    const salesList = await db.select().from(sales).where(eq3(sales.businessId, req.businessId)).orderBy(desc(sales.date), desc(sales.time));
+    const salesList = await db.select().from(sales).where(eq4(sales.businessId, req.businessId)).orderBy(desc(sales.date), desc(sales.time));
     let itemsList = [];
     if (salesList.length > 0) {
       itemsList = await db.select({
@@ -2562,7 +3500,7 @@ app.get("/api/sales", requireAuth, async (req, res) => {
         costPrice: saleItems.costPrice,
         discount: saleItems.discount,
         total: saleItems.total
-      }).from(saleItems).innerJoin(sales, eq3(saleItems.saleId, sales.id)).where(eq3(sales.businessId, req.businessId));
+      }).from(saleItems).innerJoin(sales, eq4(saleItems.saleId, sales.id)).where(eq4(sales.businessId, req.businessId));
     }
     const itemsBySale = /* @__PURE__ */ new Map();
     for (const item of itemsList) {
@@ -2606,10 +3544,10 @@ app.post("/api/sales", requireAuth, requirePermission("create_sale"), async (req
     return;
   }
   const saleDate = data.date || (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
-  const closedRecon = await db.select().from(dailyReconciliations).where(and3(
-    eq3(dailyReconciliations.businessId, req.businessId),
-    eq3(dailyReconciliations.date, saleDate),
-    eq3(dailyReconciliations.status, "closed")
+  const closedRecon = await db.select().from(dailyReconciliations).where(and4(
+    eq4(dailyReconciliations.businessId, req.businessId),
+    eq4(dailyReconciliations.date, saleDate),
+    eq4(dailyReconciliations.status, "closed")
   )).limit(1);
   if (closedRecon.length > 0) {
     res.status(403).json({
@@ -2619,7 +3557,7 @@ app.post("/api/sales", requireAuth, requirePermission("create_sale"), async (req
   }
   try {
     const result = await db.transaction(async (tx) => {
-      const bizRows = await tx.select().from(businesses).where(eq3(businesses.id, req.businessId)).for("update");
+      const bizRows = await tx.select().from(businesses).where(eq4(businesses.id, req.businessId)).for("update");
       if (bizRows.length === 0) throw new Error("Business record not found");
       const biz = bizRows[0];
       const limitCheck = await checkPlanLimit(req.businessId, "monthlySales", tx);
@@ -2630,7 +3568,7 @@ app.post("/api/sales", requireAuth, requirePermission("create_sale"), async (req
         throw limitError;
       }
       const maxSeqQuery = await tx.execute(
-        sql2`SELECT COALESCE(MAX(CAST(SUBSTRING(invoice_number FROM '[0-9]+$') AS INTEGER)), 0) as max_seq FROM sales WHERE business_id = ${req.businessId}`
+        sql4`SELECT COALESCE(MAX(CAST(SUBSTRING(invoice_number FROM '[0-9]+$') AS INTEGER)), 0) as max_seq FROM sales WHERE business_id = ${req.businessId}`
       );
       const dbMaxSeq = Number(maxSeqQuery.rows[0]?.max_seq) || 0;
       const baseSeq = Math.max(biz.lastInvoiceSequence || 100, dbMaxSeq);
@@ -2638,7 +3576,7 @@ app.post("/api/sales", requireAuth, requirePermission("create_sale"), async (req
       const currentYear = (/* @__PURE__ */ new Date()).getFullYear();
       const prefix = biz.name.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 4) || "SMT";
       const invoiceNumber = `${prefix}-${currentYear}-${String(nextSeq).padStart(3, "0")}`;
-      await tx.update(businesses).set({ lastInvoiceSequence: nextSeq, updatedAt: /* @__PURE__ */ new Date() }).where(eq3(businesses.id, req.businessId));
+      await tx.update(businesses).set({ lastInvoiceSequence: nextSeq, updatedAt: /* @__PURE__ */ new Date() }).where(eq4(businesses.id, req.businessId));
       const calculated = calculateSaleTotals(
         data.items,
         data.discount || 0,
@@ -2688,13 +3626,13 @@ app.post("/api/sales", requireAuth, requirePermission("create_sale"), async (req
         });
         if (item.type === "product" && item.productId) {
           await tx.execute(
-            sql2`UPDATE products SET current_stock = GREATEST(0, current_stock - ${item.quantity}), updated_at = ${now} WHERE id = ${item.productId}`
+            sql4`UPDATE products SET current_stock = GREATEST(0, current_stock - ${item.quantity}), updated_at = ${now} WHERE id = ${item.productId}`
           );
         }
       }
       if (data.customerId) {
         await tx.execute(
-          sql2`UPDATE customers SET 
+          sql4`UPDATE customers SET 
                 total_purchases = total_purchases + ${calculated.totalAmount},
                 total_paid = total_paid + ${calculated.totalAmount - calculated.balanceDue},
                 outstanding_debt = outstanding_debt + ${calculated.balanceDue},
@@ -2736,7 +3674,7 @@ app.put("/api/sales/:id", requireAuth, requirePermission("edit_sale"), async (re
   const id = req.params.id;
   const data = req.body;
   try {
-    const saleList = await db.select().from(sales).where(and3(eq3(sales.id, id), eq3(sales.businessId, req.businessId))).limit(1);
+    const saleList = await db.select().from(sales).where(and4(eq4(sales.id, id), eq4(sales.businessId, req.businessId))).limit(1);
     if (saleList.length === 0) {
       res.status(404).json({ error: "Sale record not found" });
       return;
@@ -2747,10 +3685,10 @@ app.put("/api/sales/:id", requireAuth, requirePermission("edit_sale"), async (re
     if (targetDate !== currentSale.date) {
       checkDates.push(targetDate);
     }
-    const closedRecon = await db.select().from(dailyReconciliations).where(and3(
-      eq3(dailyReconciliations.businessId, req.businessId),
+    const closedRecon = await db.select().from(dailyReconciliations).where(and4(
+      eq4(dailyReconciliations.businessId, req.businessId),
       inArray(dailyReconciliations.date, checkDates),
-      eq3(dailyReconciliations.status, "closed")
+      eq4(dailyReconciliations.status, "closed")
     )).limit(1);
     if (closedRecon.length > 0) {
       res.status(403).json({
@@ -2759,10 +3697,10 @@ app.put("/api/sales/:id", requireAuth, requirePermission("edit_sale"), async (re
       return;
     }
     const updatedSale = await db.transaction(async (tx) => {
-      const bizRows = await tx.select().from(businesses).where(eq3(businesses.id, req.businessId)).for("update");
+      const bizRows = await tx.select().from(businesses).where(eq4(businesses.id, req.businessId)).for("update");
       if (bizRows.length === 0) throw new Error("Business record not found");
       const biz = bizRows[0];
-      const existingItems = await tx.select().from(saleItems).where(eq3(saleItems.saleId, id));
+      const existingItems = await tx.select().from(saleItems).where(eq4(saleItems.saleId, id));
       const itemsToUse = Array.isArray(data.items) && data.items.length > 0 ? data.items : existingItems.map((it) => ({
         productId: it.productId,
         productName: it.productName,
@@ -2787,11 +3725,11 @@ app.put("/api/sales/:id", requireAuth, requirePermission("edit_sale"), async (re
         for (const oldItem of existingItems) {
           if (oldItem.type === "product" && oldItem.productId) {
             await tx.execute(
-              sql2`UPDATE products SET current_stock = current_stock + ${oldItem.quantity}, updated_at = ${now} WHERE id = ${oldItem.productId}`
+              sql4`UPDATE products SET current_stock = current_stock + ${oldItem.quantity}, updated_at = ${now} WHERE id = ${oldItem.productId}`
             );
           }
         }
-        await tx.delete(saleItems).where(eq3(saleItems.saleId, id));
+        await tx.delete(saleItems).where(eq4(saleItems.saleId, id));
         for (const item of data.items) {
           const itemId = `sitem_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
           await tx.insert(saleItems).values({
@@ -2808,7 +3746,7 @@ app.put("/api/sales/:id", requireAuth, requirePermission("edit_sale"), async (re
           });
           if (item.type === "product" && item.productId) {
             await tx.execute(
-              sql2`UPDATE products SET current_stock = GREATEST(0, current_stock - ${item.quantity}), updated_at = ${now} WHERE id = ${item.productId}`
+              sql4`UPDATE products SET current_stock = GREATEST(0, current_stock - ${item.quantity}), updated_at = ${now} WHERE id = ${item.productId}`
             );
           }
         }
@@ -2817,7 +3755,7 @@ app.put("/api/sales/:id", requireAuth, requirePermission("edit_sale"), async (re
       const newCustomerId = data.customerId !== void 0 ? data.customerId : oldCustomerId;
       if (oldCustomerId) {
         await tx.execute(
-          sql2`UPDATE customers SET 
+          sql4`UPDATE customers SET 
                 total_purchases = GREATEST(0, total_purchases - ${Number(currentSale.totalAmount)}),
                 total_paid = GREATEST(0, total_paid - ${Number(currentSale.amountPaid)}),
                 outstanding_debt = GREATEST(0, outstanding_debt - ${Number(currentSale.balanceDue)}),
@@ -2827,7 +3765,7 @@ app.put("/api/sales/:id", requireAuth, requirePermission("edit_sale"), async (re
       }
       if (newCustomerId) {
         await tx.execute(
-          sql2`UPDATE customers SET 
+          sql4`UPDATE customers SET 
                 total_purchases = total_purchases + ${calculated.totalAmount},
                 total_paid = total_paid + ${calculated.totalAmount - calculated.balanceDue},
                 outstanding_debt = outstanding_debt + ${calculated.balanceDue},
@@ -2851,8 +3789,8 @@ app.put("/api/sales/:id", requireAuth, requirePermission("edit_sale"), async (re
         balanceDue: String(calculated.balanceDue),
         notes: data.notes !== void 0 ? data.notes?.trim() || null : currentSale.notes,
         updatedAt: now
-      }).where(eq3(sales.id, id));
-      const updated = await tx.select().from(sales).where(eq3(sales.id, id)).limit(1);
+      }).where(eq4(sales.id, id));
+      const updated = await tx.select().from(sales).where(eq4(sales.id, id)).limit(1);
       return updated[0];
     });
     await logServerAudit(
@@ -2874,16 +3812,16 @@ app.put("/api/sales/:id", requireAuth, requirePermission("edit_sale"), async (re
 app.delete("/api/sales/:id", requireAuth, requirePermission("delete_sale"), async (req, res) => {
   const id = req.params.id;
   try {
-    const saleList = await db.select().from(sales).where(and3(eq3(sales.id, id), eq3(sales.businessId, req.businessId))).limit(1);
+    const saleList = await db.select().from(sales).where(and4(eq4(sales.id, id), eq4(sales.businessId, req.businessId))).limit(1);
     if (saleList.length === 0) {
       res.status(404).json({ error: "Sale record not found" });
       return;
     }
     const sale = saleList[0];
-    const closedRecon = await db.select().from(dailyReconciliations).where(and3(
-      eq3(dailyReconciliations.businessId, req.businessId),
-      eq3(dailyReconciliations.date, sale.date),
-      eq3(dailyReconciliations.status, "closed")
+    const closedRecon = await db.select().from(dailyReconciliations).where(and4(
+      eq4(dailyReconciliations.businessId, req.businessId),
+      eq4(dailyReconciliations.date, sale.date),
+      eq4(dailyReconciliations.status, "closed")
     )).limit(1);
     if (closedRecon.length > 0) {
       res.status(403).json({
@@ -2894,7 +3832,7 @@ app.delete("/api/sales/:id", requireAuth, requirePermission("delete_sale"), asyn
     await db.transaction(async (tx) => {
       if (sale.customerId) {
         await tx.execute(
-          sql2`UPDATE customers SET 
+          sql4`UPDATE customers SET 
                 total_purchases = GREATEST(0, total_purchases - ${Number(sale.totalAmount)}),
                 total_paid = GREATEST(0, total_paid - ${Number(sale.amountPaid)}),
                 outstanding_debt = GREATEST(0, outstanding_debt - ${Number(sale.balanceDue)}),
@@ -2902,8 +3840,8 @@ app.delete("/api/sales/:id", requireAuth, requirePermission("delete_sale"), asyn
               WHERE id = ${sale.customerId}`
         );
       }
-      await tx.delete(saleItems).where(eq3(saleItems.saleId, id));
-      await tx.delete(sales).where(eq3(sales.id, id));
+      await tx.delete(saleItems).where(eq4(saleItems.saleId, id));
+      await tx.delete(sales).where(eq4(sales.id, id));
     });
     await logServerAudit(req.businessId, req.user.id, req.user.name, req.user.role, "delete", "sale", id, `Deleted sale ${sale.invoiceNumber} (${sale.customerName})`);
     res.json({ success: true });
@@ -2913,7 +3851,7 @@ app.delete("/api/sales/:id", requireAuth, requirePermission("delete_sale"), asyn
 });
 app.get("/api/expenses", requireAuth, async (req, res) => {
   try {
-    const list = await db.select().from(expenses).where(eq3(expenses.businessId, req.businessId)).orderBy(desc(expenses.date), desc(expenses.time));
+    const list = await db.select().from(expenses).where(eq4(expenses.businessId, req.businessId)).orderBy(desc(expenses.date), desc(expenses.time));
     const parsed = list.map((e) => ({
       ...e,
       amount: Number(e.amount)
@@ -2931,10 +3869,10 @@ app.post("/api/expenses", requireAuth, requirePermission("create_expense"), asyn
     return;
   }
   const expDate = data.date || (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
-  const closedRecon = await db.select().from(dailyReconciliations).where(and3(
-    eq3(dailyReconciliations.businessId, req.businessId),
-    eq3(dailyReconciliations.date, expDate),
-    eq3(dailyReconciliations.status, "closed")
+  const closedRecon = await db.select().from(dailyReconciliations).where(and4(
+    eq4(dailyReconciliations.businessId, req.businessId),
+    eq4(dailyReconciliations.date, expDate),
+    eq4(dailyReconciliations.status, "closed")
   )).limit(1);
   if (closedRecon.length > 0) {
     res.status(403).json({
@@ -2946,7 +3884,7 @@ app.post("/api/expenses", requireAuth, requirePermission("create_expense"), asyn
     const id = `exp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const now = (/* @__PURE__ */ new Date()).toISOString();
     await db.transaction(async (tx) => {
-      const bizRows = await tx.select().from(businesses).where(eq3(businesses.id, req.businessId)).for("update");
+      const bizRows = await tx.select().from(businesses).where(eq4(businesses.id, req.businessId)).for("update");
       if (bizRows.length === 0) throw new Error("Business record not found");
       const limitCheck = await checkPlanLimit(req.businessId, "monthlyExpenses", tx);
       if (!limitCheck.allowed) {
@@ -2998,7 +3936,7 @@ app.put("/api/expenses/:id", requireAuth, requirePermission("edit_expense"), asy
   const id = req.params.id;
   const data = req.body;
   try {
-    const expList = await db.select().from(expenses).where(and3(eq3(expenses.id, id), eq3(expenses.businessId, req.businessId))).limit(1);
+    const expList = await db.select().from(expenses).where(and4(eq4(expenses.id, id), eq4(expenses.businessId, req.businessId))).limit(1);
     if (expList.length === 0) {
       res.status(404).json({ error: "Expense record not found" });
       return;
@@ -3009,10 +3947,10 @@ app.put("/api/expenses/:id", requireAuth, requirePermission("edit_expense"), asy
     if (targetDate !== currentExp.date) {
       checkDates.push(targetDate);
     }
-    const closedRecon = await db.select().from(dailyReconciliations).where(and3(
-      eq3(dailyReconciliations.businessId, req.businessId),
+    const closedRecon = await db.select().from(dailyReconciliations).where(and4(
+      eq4(dailyReconciliations.businessId, req.businessId),
       inArray(dailyReconciliations.date, checkDates),
-      eq3(dailyReconciliations.status, "closed")
+      eq4(dailyReconciliations.status, "closed")
     )).limit(1);
     if (closedRecon.length > 0) {
       res.status(403).json({
@@ -3040,7 +3978,7 @@ app.put("/api/expenses/:id", requireAuth, requirePermission("edit_expense"), asy
       referenceNumber: data.referenceNumber !== void 0 ? data.referenceNumber?.trim() || null : currentExp.referenceNumber,
       notes: data.notes !== void 0 ? data.notes?.trim() || null : currentExp.notes,
       updatedAt: now
-    }).where(eq3(expenses.id, id));
+    }).where(eq4(expenses.id, id));
     await logServerAudit(
       req.businessId,
       req.user.id,
@@ -3059,16 +3997,16 @@ app.put("/api/expenses/:id", requireAuth, requirePermission("edit_expense"), asy
 app.delete("/api/expenses/:id", requireAuth, requirePermission("delete_expense"), async (req, res) => {
   const id = req.params.id;
   try {
-    const expList = await db.select().from(expenses).where(and3(eq3(expenses.id, id), eq3(expenses.businessId, req.businessId))).limit(1);
+    const expList = await db.select().from(expenses).where(and4(eq4(expenses.id, id), eq4(expenses.businessId, req.businessId))).limit(1);
     if (expList.length === 0) {
       res.status(404).json({ error: "Expense not found" });
       return;
     }
     const exp = expList[0];
-    const closedRecon = await db.select().from(dailyReconciliations).where(and3(
-      eq3(dailyReconciliations.businessId, req.businessId),
-      eq3(dailyReconciliations.date, exp.date),
-      eq3(dailyReconciliations.status, "closed")
+    const closedRecon = await db.select().from(dailyReconciliations).where(and4(
+      eq4(dailyReconciliations.businessId, req.businessId),
+      eq4(dailyReconciliations.date, exp.date),
+      eq4(dailyReconciliations.status, "closed")
     )).limit(1);
     if (closedRecon.length > 0) {
       res.status(403).json({
@@ -3076,7 +4014,7 @@ app.delete("/api/expenses/:id", requireAuth, requirePermission("delete_expense")
       });
       return;
     }
-    await db.delete(expenses).where(eq3(expenses.id, id));
+    await db.delete(expenses).where(eq4(expenses.id, id));
     await logServerAudit(req.businessId, req.user.id, req.user.name, req.user.role, "delete", "expense", id, `Deleted expense: ${exp.description}`);
     res.json({ success: true });
   } catch (err) {
@@ -3085,7 +4023,7 @@ app.delete("/api/expenses/:id", requireAuth, requirePermission("delete_expense")
 });
 app.get("/api/payables", requireAuth, async (req, res) => {
   try {
-    const list = await db.select().from(payables).where(eq3(payables.businessId, req.businessId)).orderBy(desc(payables.updatedAt));
+    const list = await db.select().from(payables).where(eq4(payables.businessId, req.businessId)).orderBy(desc(payables.updatedAt));
     const parsed = list.map((p) => ({
       ...p,
       totalAmount: Number(p.totalAmount),
@@ -3128,7 +4066,7 @@ app.post("/api/payables", requireAuth, async (req, res) => {
 });
 app.get("/api/debt-payments", requireAuth, async (req, res) => {
   try {
-    const list = await db.select().from(debtPayments).where(eq3(debtPayments.businessId, req.businessId)).orderBy(desc(debtPayments.date));
+    const list = await db.select().from(debtPayments).where(eq4(debtPayments.businessId, req.businessId)).orderBy(desc(debtPayments.date));
     res.json(list.map((d) => ({ ...d, amount: Number(d.amount) })));
   } catch (err) {
     res.status(500).json({ error: "Failed to load debt payments" });
@@ -3151,10 +4089,10 @@ app.post("/api/debt-payments", requireAuth, async (req, res) => {
     let targetName = data.targetName;
     if (!targetName) {
       if (targetType === "customer") {
-        const c = await db.select().from(customers).where(eq3(customers.id, targetId)).limit(1);
+        const c = await db.select().from(customers).where(eq4(customers.id, targetId)).limit(1);
         targetName = c[0]?.name || "Customer";
       } else {
-        const p = await db.select().from(payables).where(eq3(payables.id, targetId)).limit(1);
+        const p = await db.select().from(payables).where(eq4(payables.id, targetId)).limit(1);
         targetName = p[0]?.vendorName || "Supplier";
       }
     }
@@ -3179,7 +4117,7 @@ app.post("/api/debt-payments", requireAuth, async (req, res) => {
       });
       if (targetType === "customer") {
         await tx.execute(
-          sql2`UPDATE customers SET 
+          sql4`UPDATE customers SET 
                 total_paid = total_paid + ${numAmount},
                 outstanding_debt = GREATEST(0, outstanding_debt - ${numAmount}),
                 updated_at = ${now}
@@ -3187,7 +4125,7 @@ app.post("/api/debt-payments", requireAuth, async (req, res) => {
         );
       } else if (targetType === "payable") {
         await tx.execute(
-          sql2`UPDATE payables SET 
+          sql4`UPDATE payables SET 
                 amount_paid = amount_paid + ${numAmount},
                 balance_due = GREATEST(0, balance_due - ${numAmount}),
                 status = CASE WHEN (balance_due - ${numAmount}) <= 0 THEN 'paid' ELSE 'partial' END,
@@ -3204,7 +4142,7 @@ app.post("/api/debt-payments", requireAuth, async (req, res) => {
 });
 app.get("/api/recurring-expenses", requireAuth, async (req, res) => {
   try {
-    const list = await db.select().from(recurringExpenses).where(eq3(recurringExpenses.businessId, req.businessId)).orderBy(desc(recurringExpenses.updatedAt));
+    const list = await db.select().from(recurringExpenses).where(eq4(recurringExpenses.businessId, req.businessId)).orderBy(desc(recurringExpenses.updatedAt));
     res.json(
       list.map((r) => ({
         ...r,
@@ -3250,7 +4188,7 @@ app.post("/api/recurring-expenses", requireAuth, requirePermission("manage_recur
     }
     const id = data.id || `rec_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const now = (/* @__PURE__ */ new Date()).toISOString();
-    const existing = await db.select().from(recurringExpenses).where(and3(eq3(recurringExpenses.id, id), eq3(recurringExpenses.businessId, req.businessId))).limit(1);
+    const existing = await db.select().from(recurringExpenses).where(and4(eq4(recurringExpenses.id, id), eq4(recurringExpenses.businessId, req.businessId))).limit(1);
     if (existing.length > 0) {
       res.status(409).json({ error: "Recurring expense schedule with this ID already exists" });
       return;
@@ -3320,7 +4258,7 @@ app.put("/api/recurring-expenses/:id", requireAuth, requirePermission("manage_re
   const id = req.params.id;
   const data = req.body;
   try {
-    const existing = await db.select().from(recurringExpenses).where(and3(eq3(recurringExpenses.id, id), eq3(recurringExpenses.businessId, req.businessId))).limit(1);
+    const existing = await db.select().from(recurringExpenses).where(and4(eq4(recurringExpenses.id, id), eq4(recurringExpenses.businessId, req.businessId))).limit(1);
     if (existing.length === 0) {
       res.status(404).json({ error: "Recurring expense schedule not found or not owned by your business" });
       return;
@@ -3373,7 +4311,7 @@ app.put("/api/recurring-expenses/:id", requireAuth, requirePermission("manage_re
     if (data.generatedExpenseIds !== void 0 && Array.isArray(data.generatedExpenseIds)) {
       updatePayload.generatedExpenseIds = data.generatedExpenseIds;
     }
-    await db.update(recurringExpenses).set(updatePayload).where(and3(eq3(recurringExpenses.id, id), eq3(recurringExpenses.businessId, req.businessId)));
+    await db.update(recurringExpenses).set(updatePayload).where(and4(eq4(recurringExpenses.id, id), eq4(recurringExpenses.businessId, req.businessId)));
     await logServerAudit(
       req.businessId,
       req.user.id,
@@ -3393,13 +4331,13 @@ app.put("/api/recurring-expenses/:id", requireAuth, requirePermission("manage_re
 app.delete("/api/recurring-expenses/:id", requireAuth, requirePermission("manage_recurring_expenses"), async (req, res) => {
   const id = req.params.id;
   try {
-    const existing = await db.select().from(recurringExpenses).where(and3(eq3(recurringExpenses.id, id), eq3(recurringExpenses.businessId, req.businessId))).limit(1);
+    const existing = await db.select().from(recurringExpenses).where(and4(eq4(recurringExpenses.id, id), eq4(recurringExpenses.businessId, req.businessId))).limit(1);
     if (existing.length === 0) {
       res.status(404).json({ error: "Recurring expense schedule not found or not owned by your business" });
       return;
     }
     const rec = existing[0];
-    await db.delete(recurringExpenses).where(and3(eq3(recurringExpenses.id, id), eq3(recurringExpenses.businessId, req.businessId)));
+    await db.delete(recurringExpenses).where(and4(eq4(recurringExpenses.id, id), eq4(recurringExpenses.businessId, req.businessId)));
     await logServerAudit(
       req.businessId,
       req.user.id,
@@ -3418,7 +4356,7 @@ app.delete("/api/recurring-expenses/:id", requireAuth, requirePermission("manage
 });
 app.get("/api/reconciliation", requireAuth, requirePermission("view_reconciliation"), async (req, res) => {
   try {
-    const list = await db.select().from(dailyReconciliations).where(eq3(dailyReconciliations.businessId, req.businessId)).orderBy(desc(dailyReconciliations.date));
+    const list = await db.select().from(dailyReconciliations).where(eq4(dailyReconciliations.businessId, req.businessId)).orderBy(desc(dailyReconciliations.date));
     const parsed = list.map((r) => ({
       ...r,
       openingFloat: Number(r.openingFloat),
@@ -3442,7 +4380,7 @@ app.get("/api/reconciliation", requireAuth, requirePermission("view_reconciliati
 app.get("/api/reconciliation/system-totals", requireAuth, requirePermission("view_reconciliation"), async (req, res) => {
   const date = req.query.date || (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
   try {
-    const daySales = await db.select().from(sales).where(and3(eq3(sales.businessId, req.businessId), eq3(sales.date, date)));
+    const daySales = await db.select().from(sales).where(and4(eq4(sales.businessId, req.businessId), eq4(sales.date, date)));
     const systemCashSales = roundToKobo(
       daySales.filter((s) => s.paymentMethod === "Cash").reduce((sum, s) => sum + (Number(s.amountPaid) || 0), 0)
     );
@@ -3452,11 +4390,11 @@ app.get("/api/reconciliation/system-totals", requireAuth, requirePermission("vie
     const systemTransferSales = roundToKobo(
       daySales.filter((s) => s.paymentMethod === "Bank Transfer").reduce((sum, s) => sum + (Number(s.amountPaid) || 0), 0)
     );
-    const dayDebtPayments = await db.select().from(debtPayments).where(and3(eq3(debtPayments.businessId, req.businessId), eq3(debtPayments.date, date)));
+    const dayDebtPayments = await db.select().from(debtPayments).where(and4(eq4(debtPayments.businessId, req.businessId), eq4(debtPayments.date, date)));
     const systemDebtCashCollected = roundToKobo(
       dayDebtPayments.filter((p) => p.targetType === "customer" && p.paymentMethod === "Cash").reduce((sum, p) => sum + (Number(p.amount) || 0), 0)
     );
-    const dayExpenses = await db.select().from(expenses).where(and3(eq3(expenses.businessId, req.businessId), eq3(expenses.date, date)));
+    const dayExpenses = await db.select().from(expenses).where(and4(eq4(expenses.businessId, req.businessId), eq4(expenses.date, date)));
     const systemCashExpenses = roundToKobo(
       dayExpenses.filter((e) => e.paymentMethod === "Cash").reduce((sum, e) => sum + (Number(e.amount) || 0), 0)
     );
@@ -3476,7 +4414,7 @@ app.post("/api/reconciliation/open", requireAuth, requirePermission("manage_reco
   const todayDate = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
   const safeFloat = Math.max(0, roundToKobo(Number(openingFloat) || 0));
   try {
-    const existing = await db.select().from(dailyReconciliations).where(and3(eq3(dailyReconciliations.businessId, req.businessId), eq3(dailyReconciliations.date, todayDate))).limit(1);
+    const existing = await db.select().from(dailyReconciliations).where(and4(eq4(dailyReconciliations.businessId, req.businessId), eq4(dailyReconciliations.date, todayDate))).limit(1);
     if (existing.length > 0) {
       res.status(409).json({ error: "An open or closed reconciliation already exists for this business date." });
       return;
@@ -3522,7 +4460,7 @@ app.post("/api/reconciliation/:id/close", requireAuth, requirePermission("manage
   const { actualCashCounted, actualPosSettlement, actualTransferSettlement, cashDrop, varianceReason, reconciliationNotes } = req.body;
   try {
     const result = await db.transaction(async (tx) => {
-      const recList = await tx.select().from(dailyReconciliations).where(and3(eq3(dailyReconciliations.id, id), eq3(dailyReconciliations.businessId, req.businessId))).for("update");
+      const recList = await tx.select().from(dailyReconciliations).where(and4(eq4(dailyReconciliations.id, id), eq4(dailyReconciliations.businessId, req.businessId))).for("update");
       if (recList.length === 0) {
         return { status: 404, error: "Reconciliation record not found" };
       }
@@ -3530,7 +4468,7 @@ app.post("/api/reconciliation/:id/close", requireAuth, requirePermission("manage
       if (rec.status !== "open") {
         return { status: 409, error: `Register is already marked as ${rec.status}.` };
       }
-      const daySales = await tx.select().from(sales).where(and3(eq3(sales.businessId, req.businessId), eq3(sales.date, rec.date)));
+      const daySales = await tx.select().from(sales).where(and4(eq4(sales.businessId, req.businessId), eq4(sales.date, rec.date)));
       const systemCashSales = roundToKobo(
         daySales.filter((s) => s.paymentMethod === "Cash").reduce((sum, s) => sum + (Number(s.amountPaid) || 0), 0)
       );
@@ -3540,11 +4478,11 @@ app.post("/api/reconciliation/:id/close", requireAuth, requirePermission("manage
       const systemTransferSales = roundToKobo(
         daySales.filter((s) => s.paymentMethod === "Bank Transfer").reduce((sum, s) => sum + (Number(s.amountPaid) || 0), 0)
       );
-      const dayDebtPayments = await tx.select().from(debtPayments).where(and3(eq3(debtPayments.businessId, req.businessId), eq3(debtPayments.date, rec.date)));
+      const dayDebtPayments = await tx.select().from(debtPayments).where(and4(eq4(debtPayments.businessId, req.businessId), eq4(debtPayments.date, rec.date)));
       const systemDebtCashCollected = roundToKobo(
         dayDebtPayments.filter((p) => p.targetType === "customer" && p.paymentMethod === "Cash").reduce((sum, p) => sum + (Number(p.amount) || 0), 0)
       );
-      const dayExpenses = await tx.select().from(expenses).where(and3(eq3(expenses.businessId, req.businessId), eq3(expenses.date, rec.date)));
+      const dayExpenses = await tx.select().from(expenses).where(and4(eq4(expenses.businessId, req.businessId), eq4(expenses.date, rec.date)));
       const systemCashExpenses = roundToKobo(
         dayExpenses.filter((e) => e.paymentMethod === "Cash").reduce((sum, e) => sum + (Number(e.amount) || 0), 0)
       );
@@ -3585,7 +4523,7 @@ app.post("/api/reconciliation/:id/close", requireAuth, requirePermission("manage
         closedByUserId: req.user.id,
         closedByUserName: req.user.name,
         updatedAt: now
-      }).where(eq3(dailyReconciliations.id, id));
+      }).where(eq4(dailyReconciliations.id, id));
       const varLabel = varianceResult.variance === 0 ? "Balanced" : `Variance \u20A6${varianceResult.variance.toLocaleString()}`;
       await tx.insert(auditLogs).values({
         id: `audit_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -3619,7 +4557,7 @@ app.post("/api/reconciliation/:id/adjust", requireAuth, requirePermission("manag
     return;
   }
   try {
-    const recList = await db.select().from(dailyReconciliations).where(and3(eq3(dailyReconciliations.id, id), eq3(dailyReconciliations.businessId, req.businessId))).limit(1);
+    const recList = await db.select().from(dailyReconciliations).where(and4(eq4(dailyReconciliations.id, id), eq4(dailyReconciliations.businessId, req.businessId))).limit(1);
     if (recList.length === 0) {
       res.status(404).json({ error: "Record not found" });
       return;
@@ -3635,7 +4573,7 @@ app.post("/api/reconciliation/:id/adjust", requireAuth, requirePermission("manag
       varianceReason: `[Adjusted] ${adjustmentReason.trim()}`,
       status: "adjusted",
       updatedAt: now
-    }).where(eq3(dailyReconciliations.id, id));
+    }).where(eq4(dailyReconciliations.id, id));
     await logServerAudit(
       req.businessId,
       req.user.id,
@@ -3653,7 +4591,7 @@ app.post("/api/reconciliation/:id/adjust", requireAuth, requirePermission("manag
 });
 app.get("/api/audit-logs", requireAuth, requirePermission("view_audit_log"), async (req, res) => {
   try {
-    const list = await db.select().from(auditLogs).where(eq3(auditLogs.businessId, req.businessId)).orderBy(desc(auditLogs.timestamp)).limit(200);
+    const list = await db.select().from(auditLogs).where(eq4(auditLogs.businessId, req.businessId)).orderBy(desc(auditLogs.timestamp)).limit(200);
     res.json(list);
   } catch (err) {
     res.status(500).json({ error: "Failed to load audit logs" });
@@ -3679,7 +4617,7 @@ app.post("/api/migrate/import-localstorage", requireAuth, requirePermission("man
     await db.transaction(async (tx) => {
       if (Array.isArray(customers2)) {
         for (const c of customers2) {
-          const exists = await tx.select().from(customers).where(eq3(customers.id, c.id)).limit(1);
+          const exists = await tx.select().from(customers).where(eq4(customers.id, c.id)).limit(1);
           if (exists.length === 0) {
             await tx.insert(customers).values({
               id: c.id,
@@ -3701,7 +4639,7 @@ app.post("/api/migrate/import-localstorage", requireAuth, requirePermission("man
       }
       if (Array.isArray(products2)) {
         for (const p of products2) {
-          const exists = await tx.select().from(products).where(eq3(products.id, p.id)).limit(1);
+          const exists = await tx.select().from(products).where(eq4(products.id, p.id)).limit(1);
           if (exists.length === 0) {
             await tx.insert(products).values({
               id: p.id,
@@ -3726,7 +4664,7 @@ app.post("/api/migrate/import-localstorage", requireAuth, requirePermission("man
       }
       if (Array.isArray(sales2)) {
         for (const s of sales2) {
-          const exists = await tx.select().from(sales).where(eq3(sales.id, s.id)).limit(1);
+          const exists = await tx.select().from(sales).where(eq4(sales.id, s.id)).limit(1);
           if (exists.length === 0) {
             await tx.insert(sales).values({
               id: s.id,
@@ -3773,7 +4711,7 @@ app.post("/api/migrate/import-localstorage", requireAuth, requirePermission("man
       }
       if (Array.isArray(expenses2)) {
         for (const e of expenses2) {
-          const exists = await tx.select().from(expenses).where(eq3(expenses.id, e.id)).limit(1);
+          const exists = await tx.select().from(expenses).where(eq4(expenses.id, e.id)).limit(1);
           if (exists.length === 0) {
             await tx.insert(expenses).values({
               id: e.id,
@@ -3798,7 +4736,7 @@ app.post("/api/migrate/import-localstorage", requireAuth, requirePermission("man
       }
       if (Array.isArray(recurringExpenses2)) {
         for (const r of recurringExpenses2) {
-          const exists = await tx.select().from(recurringExpenses).where(eq3(recurringExpenses.id, r.id)).limit(1);
+          const exists = await tx.select().from(recurringExpenses).where(eq4(recurringExpenses.id, r.id)).limit(1);
           if (exists.length === 0) {
             await tx.insert(recurringExpenses).values({
               id: r.id,
@@ -3868,7 +4806,7 @@ app.post("/api/subscription/change-plan", requireAuth, requirePermission("manage
   const billingInterval = interval === "annual" ? "annual" : "monthly";
   try {
     if (planId === "free") {
-      const existing = await db.select().from(subscriptions).where(eq3(subscriptions.businessId, req.businessId)).limit(1);
+      const existing = await db.select().from(subscriptions).where(eq4(subscriptions.businessId, req.businessId)).limit(1);
       const nowIso = (/* @__PURE__ */ new Date()).toISOString();
       if (existing.length > 0) {
         await db.update(subscriptions).set({
@@ -3877,7 +4815,7 @@ app.post("/api/subscription/change-plan", requireAuth, requirePermission("manage
           status: "active",
           cancelAtPeriodEnd: false,
           updatedAt: nowIso
-        }).where(eq3(subscriptions.businessId, req.businessId));
+        }).where(eq4(subscriptions.businessId, req.businessId));
       } else {
         await db.insert(subscriptions).values({
           id: `sub_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -3940,14 +4878,14 @@ app.post("/api/subscription/admin-set-plan", requireAuth, requirePermission("man
   }
   try {
     const nowIso = (/* @__PURE__ */ new Date()).toISOString();
-    const existing = await db.select().from(subscriptions).where(eq3(subscriptions.businessId, req.businessId)).limit(1);
+    const existing = await db.select().from(subscriptions).where(eq4(subscriptions.businessId, req.businessId)).limit(1);
     if (existing.length > 0) {
       await db.update(subscriptions).set({
         planId,
         billingInterval,
         status: "active",
         updatedAt: nowIso
-      }).where(eq3(subscriptions.businessId, req.businessId));
+      }).where(eq4(subscriptions.businessId, req.businessId));
     } else {
       await db.insert(subscriptions).values({
         id: `sub_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -4086,5 +5024,6 @@ export {
   app,
   getShutdownStatus,
   gracefulShutdown,
+  resolveServerPort,
   startServer
 };
