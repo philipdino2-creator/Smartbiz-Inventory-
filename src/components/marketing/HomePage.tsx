@@ -30,29 +30,29 @@ export const HomePage: React.FC = () => {
         {/* Subtle decorative background gradient */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[700px] h-[400px] bg-gradient-to-tr from-purple-200/40 via-purple-100/20 to-transparent dark:from-purple-950/30 dark:via-purple-900/10 dark:to-transparent rounded-full blur-3xl -z-10 pointer-events-none" />
 
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center space-y-8">
-          {/* Badge */}
-          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-purple-50 dark:bg-purple-950/60 border border-purple-200/80 dark:border-purple-800 text-[#4C0196] dark:text-purple-300 text-xs font-semibold shadow-2xs">
-            <Sparkles className="w-3.5 h-3.5 text-[#4C0196] dark:text-purple-400" />
-            <span>Designed for Small Businesses, Retailers &amp; Training Academies</span>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center space-y-7 sm:space-y-8">
+          {/* Editorial Kicker */}
+          <div className="flex items-center justify-center gap-2 text-xs font-semibold tracking-wider uppercase text-[#4C0196] dark:text-purple-400">
+            <span>Unified Business Management</span>
+            <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">·</span>
+            <span>Point of Sale, Books &amp; Records</span>
           </div>
 
           {/* Main Headline & Supporting Copy */}
-          <div className="max-w-4xl mx-auto space-y-5">
-            <h1 className="text-3xl sm:text-5xl lg:text-6xl font-extrabold text-slate-900 dark:text-white tracking-tight leading-[1.15]">
-              Run Your Business.{' '}
-              <span className="text-[#4C0196] dark:text-purple-400 block sm:inline">
-                Understand Your Numbers.
-              </span>{' '}
-              Grow With Confidence.
+          <div className="max-w-4xl mx-auto space-y-4 sm:space-y-5">
+            <h1 className="text-3xl sm:text-5xl lg:text-6xl font-extrabold text-slate-900 dark:text-white tracking-tight leading-[1.12]">
+              Run Your Business Smarter with{' '}
+              <span className="text-[#4C0196] dark:text-purple-400">
+                BizFlow
+              </span>
             </h1>
             <p className="text-base sm:text-lg lg:text-xl text-slate-600 dark:text-slate-300 max-w-2xl mx-auto leading-relaxed">
-              Manage sales, track expenses, monitor business performance and keep your records organised — all from one simple workspace.
+              Track daily sales, monitor operating expenses, manage inventory levels, keep accurate customer debt records, and gain real-time profit insights — all in one unified workspace.
             </p>
           </div>
 
           {/* Call to Actions */}
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-3.5 pt-2">
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3.5 pt-1">
             <button
               onClick={() => navigate('/register')}
               className="w-full sm:w-auto px-7 py-3.5 bg-[#4C0196] hover:bg-[#3b0075] text-white text-sm font-bold rounded-xl transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2 cursor-pointer focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[#4C0196]"
@@ -70,27 +70,27 @@ export const HomePage: React.FC = () => {
           </div>
 
           {/* Quick Value Metrics */}
-          <div className="pt-4 flex flex-wrap items-center justify-center gap-y-2 gap-x-6 text-xs text-slate-500 dark:text-slate-400">
+          <div className="pt-2 flex flex-wrap items-center justify-center gap-y-2 gap-x-6 text-xs text-slate-500 dark:text-slate-400">
             <div className="flex items-center gap-1.5">
-              <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
               <span>Instant Workspace Setup</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-              <span>PostgreSQL Reliability</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
               <span>Thermal POS Ready (58/80mm)</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span>Mobile Phone &amp; Desktop Synced</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
               <span>No Credit Card Required</span>
             </div>
           </div>
 
-          {/* Product Preview Mockup Component */}
-          <div className="pt-6 sm:pt-10 max-w-5xl mx-auto">
+          {/* Product Preview Mockup Component (Laptop + Smartphone Dual Showcase) */}
+          <div className="pt-6 sm:pt-10 max-w-6xl mx-auto">
             <ProductPreviewMockup />
           </div>
         </div>

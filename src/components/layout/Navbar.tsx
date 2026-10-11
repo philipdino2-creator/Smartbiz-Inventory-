@@ -1,6 +1,6 @@
 import React from 'react';
 import { useBusiness } from '../../context/BusinessContext';
-import { PlusCircle, MinusCircle, UserCheck, Search, Users, LogOut, Zap } from 'lucide-react';
+import { PlusCircle, MinusCircle, UserCheck, Search, Users, LogOut, Zap, Sparkles } from 'lucide-react';
 import { BizFlowLogo } from '../common/BizFlowLogo';
 import { ThemeToggle } from '../common/ThemeToggle';
 
@@ -121,6 +121,19 @@ export const Navbar: React.FC<NavbarProps> = ({
             <kbd className="hidden md:inline text-[9px] bg-white dark:bg-slate-900 text-slate-400 dark:text-slate-500 px-1 py-0.2 rounded border border-slate-300 dark:border-slate-700 font-mono">
               /
             </kbd>
+          </button>
+
+          {/* Smart AI Quick Trigger Button */}
+          <button
+            onClick={() => {
+              const btn = document.querySelector('[aria-label="Open Smart AI Executive Copilot"]') as HTMLButtonElement;
+              if (btn) btn.click();
+            }}
+            className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-[#6D28D9] dark:text-purple-300 hover:text-purple-900 dark:hover:text-white bg-purple-50 dark:bg-purple-950/60 hover:bg-purple-100 dark:hover:bg-purple-900/60 rounded-lg transition-colors cursor-pointer border border-purple-200 dark:border-purple-800 font-semibold"
+            title="Open Smart AI Executive Copilot"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400 animate-pulse" />
+            <span>Smart AI</span>
           </button>
 
           {/* Quick Expense */}

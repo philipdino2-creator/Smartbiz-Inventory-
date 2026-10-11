@@ -1,7 +1,16 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 
 export type PublicRoute = '/' | '/features' | '/how-it-works' | '/pricing' | '/faq';
-export type AuthRoute = '/login' | '/register' | '/signup' | '/forgot-password';
+export type AuthRoute =
+  | '/login'
+  | '/register'
+  | '/signup'
+  | '/forgot-password'
+  | '/onboarding'
+  | '/onboarding/step-1'
+  | '/onboarding/step-2'
+  | '/onboarding/step-3'
+  | '/onboarding/step-4';
 export type AppRoute = '/app' | '/app/dashboard' | '/app/sales' | '/app/expenses' | '/app/products' | '/app/customers' | '/app/reports' | '/app/settings' | '/app/plan';
 
 export type AppPath = PublicRoute | AuthRoute | AppRoute | string;
@@ -12,6 +21,7 @@ export interface RouterContextType {
   navigate: (to: string, options?: { replace?: boolean }) => void;
   isPublicRoute: boolean;
   isAuthRoute: boolean;
+  isOnboardingRoute: boolean;
   isAppRoute: boolean;
   getSafeReturnUrl: () => string;
 }
@@ -110,7 +120,9 @@ export const RouterProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   }, []);
 
   const isPublicRoute = ['/', '/features', '/how-it-works', '/pricing', '/faq'].includes(path);
-  const isAuthRoute = ['/login', '/register', '/signup', '/forgot-password'].includes(path);
+  const isOnboardingRoute = path.startsWith('/onboarding');
+  const isAuthRoute =
+    ['/login', '/register', '/signup', '/forgot-password'].includes(path) || isOnboardingRoute;
   const isAppRoute = path === '/app' || path.startsWith('/app/');
 
   return (
@@ -121,6 +133,7 @@ export const RouterProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         navigate,
         isPublicRoute,
         isAuthRoute,
+        isOnboardingRoute,
         isAppRoute,
         getSafeReturnUrl,
       }}

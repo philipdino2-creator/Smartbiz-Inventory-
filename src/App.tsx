@@ -30,6 +30,7 @@ import { SplashScreen } from './components/common/SplashScreen';
 import { LoginModal } from './components/auth/LoginModal';
 import { CashierSwitchModal } from './components/auth/CashierSwitchModal';
 import { AuthScreen } from './components/auth/AuthScreen';
+import { SmartAIAssistant } from './components/ai/SmartAIAssistant';
 import { RouterProvider, useRouter } from './context/RouterContext';
 import { MarketingLayout } from './components/marketing/MarketingLayout';
 import { updatePageSeo } from './utils/seo';
@@ -71,6 +72,8 @@ const AppContent: React.FC = () => {
     return 'dashboard';
   });
   const [showSplash, setShowSplash] = useState(true);
+  const [isSplashExiting, setIsSplashExiting] = useState(false);
+  const [isSplashMounted, setIsSplashMounted] = useState(true);
   const [isLoginOpen, setIsLoginOpen] = useState(false);
   const [isCashierSwitchOpen, setIsCashierSwitchOpen] = useState(false);
   const [isRecordSaleOpen, setIsRecordSaleOpen] = useState(false);
@@ -111,6 +114,17 @@ const AppContent: React.FC = () => {
     }, 750);
     return () => clearTimeout(timer);
   }, []);
+
+  // Smooth fade-out sequence once auth and minimum startup duration resolve
+  React.useEffect(() => {
+    if (!isAuthChecking && !showSplash && isSplashMounted && !isSplashExiting) {
+      setIsSplashExiting(true);
+      const exitTimer = setTimeout(() => {
+        setIsSplashMounted(false);
+      }, 300);
+      return () => clearTimeout(exitTimer);
+    }
+  }, [isAuthChecking, showSplash, isSplashMounted, isSplashExiting]);
 
   // Sync document title and OpenGraph metadata
   React.useEffect(() => {
@@ -224,12 +238,17 @@ const AppContent: React.FC = () => {
   // During initial auth session verification or startup splash, show clean splash screen
   // ALL hooks must be called BEFORE this return!
   if (isAuthChecking || showSplash) {
-    return <SplashScreen businessName="BizFlow" />;
+    return <SplashScreen isExiting={false} />;
   }
 
   // 1. PUBLIC MARKETING WEBSITE (/, /features, /how-it-works, /pricing, /faq)
   if (isPublicRoute) {
-    return <MarketingLayout />;
+    return (
+      <>
+        {isSplashMounted && <SplashScreen isExiting={isSplashExiting} />}
+        <MarketingLayout />
+      </>
+    );
   }
 
   // 2. AUTHENTICATION PAGES (/login, /register, /signup, /forgot-password)
@@ -242,26 +261,45 @@ const AppContent: React.FC = () => {
         ? 'signup'
         : path === '/forgot-password'
         ? 'forgot'
+        : path.startsWith('/onboarding')
+        ? 'onboarding'
         : 'signin';
-    return <AuthScreen initialMode={initialMode} />;
+    return (
+      <>
+        {isSplashMounted && <SplashScreen isExiting={isSplashExiting} />}
+        <AuthScreen initialMode={initialMode} />
+      </>
+    );
   }
 
   // 3. PROTECTED APPLICATION WORKSPACE (/app or /app/*)
   if (isAppRoute) {
     if (!isAuthenticated) {
-      return <AuthScreen initialMode="signin" />;
+      return (
+        <>
+          {isSplashMounted && <SplashScreen isExiting={isSplashExiting} />}
+          <AuthScreen initialMode="signin" />
+        </>
+      );
     }
   } else {
     // Unmatched fallback routes
     if (!isAuthenticated) {
-      return <MarketingLayout />;
+      return (
+        <>
+          {isSplashMounted && <SplashScreen isExiting={isSplashExiting} />}
+          <MarketingLayout />
+        </>
+      );
     } else {
       return null;
     }
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col text-slate-900 dark:text-slate-100 selection:bg-purple-100 dark:selection:bg-purple-900 selection:text-purple-900 dark:selection:text-purple-100 transition-colors duration-200">
+    <>
+      {isSplashMounted && <SplashScreen isExiting={isSplashExiting} />}
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col text-slate-900 dark:text-slate-100 selection:bg-purple-100 dark:selection:bg-purple-900 selection:text-purple-900 dark:selection:text-purple-100 transition-colors duration-200">
       {/* Top Bar Contract compliant Navbar */}
       <Navbar
         activeTab={activeTab}
@@ -468,6 +506,18 @@ const AppContent: React.FC = () => {
         onClose={() => setIsLoginOpen(false)}
       />
 
+      {/* Smart AI Executive Copilot & Decision Engine */}
+      <SmartAIAssistant
+        onOpenRecordSale={() => setIsRecordSaleOpen(true)}
+        onOpenRecordExpense={() => setIsRecordExpenseOpen(true)}
+        onOpenCollectDebt={customer => {
+          handleTabChange('customers');
+          handleOpenCollectDebt(customer);
+        }}
+        onOpenWhatsAppReminder={(customer, sale) => handleOpenWhatsAppReminder(customer, sale)}
+        onNavigateTab={tab => handleTabChange(tab)}
+      />
+
       {/* Toast Notification */}
       {toastMessage && (
         <div className="fixed bottom-20 lg:bottom-6 right-4 sm:right-6 z-50 bg-slate-900 text-white px-4 py-2.5 rounded-xl shadow-xl border border-slate-700 text-xs font-semibold flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
@@ -476,6 +526,7 @@ const AppContent: React.FC = () => {
         </div>
       )}
     </div>
+    </>
   );
 };
 

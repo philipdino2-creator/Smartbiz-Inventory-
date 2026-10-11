@@ -214,3 +214,70 @@ html.dark textarea::placeholder {
     font-size: 12px !important;
   }
 }
+
+/* ============================================================
+   BizFlow Premium Animated Preloader Keyframes & Motion Styles
+   ============================================================ */
+
+@keyframes bizflow-preloader-spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes bizflow-logo-pulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.035);
+  }
+}
+
+@keyframes bizflow-ambient-glow {
+  0%, 100% {
+    opacity: 0.35;
+    transform: scale(0.96);
+  }
+  50% {
+    opacity: 0.75;
+    transform: scale(1.06);
+  }
+}
+
+.bizflow-animate-spin-ring {
+  animation: bizflow-preloader-spin 2.4s linear infinite;
+  transform-origin: center;
+}
+
+.bizflow-animate-pulse-logo {
+  animation: bizflow-logo-pulse 2.4s ease-in-out infinite;
+  transform-origin: center;
+  will-change: transform;
+}
+
+.bizflow-animate-glow {
+  animation: bizflow-ambient-glow 2.4s ease-in-out infinite;
+  transform-origin: center;
+  will-change: opacity, transform;
+}
+
+/* Accessibility: Respect User Reduced Motion Preferences */
+@media (prefers-reduced-motion: reduce) {
+  .bizflow-animate-spin-ring {
+    animation: none !important;
+  }
+  .bizflow-animate-pulse-logo {
+    animation: none !important;
+    transform: none !important;
+  }
+  .bizflow-animate-glow {
+    animation: none !important;
+    opacity: 0.4 !important;
+    transform: none !important;
+  }
+}
+

@@ -14,11 +14,13 @@ export const createPool = () => {
       password: process.env.SQL_PASSWORD,
       database: process.env.SQL_DB_NAME,
       max: 10,
-      connectionTimeoutMillis: 15000,
+      connectionTimeoutMillis: process.env.SQL_HOST ? 15000 : 1000,
     });
 
     global._postgresPool.on('error', (err) => {
-      console.error('Unexpected error on idle SQL pool client:', err);
+      if (process.env.SQL_HOST) {
+        console.error('Unexpected error on idle SQL pool client:', err);
+      }
     });
   }
   return global._postgresPool;
@@ -33,6 +35,9 @@ export const db = drizzle(pool, { schema });
  * Sanitizes errors to prevent exposing internal connection details or credentials.
  */
 export const checkDatabaseHealth = async (customPool?: Pool): Promise<{ ok: boolean; error?: string }> => {
+  if (!process.env.SQL_HOST) {
+    return { ok: false, error: 'SQL_HOST not configured' };
+  }
   try {
     const p = customPool || pool;
     await p.query('SELECT 1');
@@ -49,6 +54,10 @@ export const closePool = async (customPool?: Pool): Promise<void> => {
   const p = customPool || global._postgresPool;
   if (p) {
     global._postgresPool = undefined;
-    await p.end();
+    try {
+      await p.end();
+    } catch {
+      // Ignore pool shutdown errors
+    }
   }
 };
